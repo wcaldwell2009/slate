@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Slate</title>
+  <link rel="icon" href="/branding/slate-mark-dark.svg" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 512 512" aria-hidden="true">
+          <path d="M128 320 A128 128 0 0 1 384 320" fill="none" stroke="#8CA891" stroke-width="52" stroke-linecap="round"/>
+        </svg>
+        <span class="brand-name">Slate</span>
+      </div>
+
+      <nav class="tabs" id="tabs">
+        <button class="tab" data-view="today">Today</button>
+        <button class="tab" data-view="week">Week</button>
+        <button class="tab" data-view="projects">Projects</button>
+        <button class="tab" data-view="tests">Tests &amp; Quizzes</button>
+        <button class="tab" data-view="classes">Classes</button>
+        <button class="tab" data-view="email">Email</button>
+        <button class="tab tab-bottom" data-view="api">API</button>
+        <button class="tab" id="tab-admin" data-view="admin">Admin</button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <span id="who" class="who hidden"></span>
+        <span id="sync-status" class="sync-status">—</span>
+        <button id="sync-btn" class="btn btn-ghost">Sync now</button>
+        <!-- Only the installed copy shows these; app.js reveals them. -->
+        <button id="quit-btn" class="btn btn-ghost quit-btn hidden">Quit Slate</button>
+        <span id="build-tag" class="build-tag hidden"></span>
+      </div>
+    </aside>
+
+    <main id="app" class="app"></main>
+  </div>
+
+  <div id="overlay" class="overlay hidden">
+    <div class="panel" id="panel"></div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

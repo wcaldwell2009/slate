@@ -1,0 +1,165 @@
+'use strict';
+// Exercises the four AI features against the REAL hidden Claude Code terminal.
+// Usage: node ai.js <baseUrl> <projectDir>
+const fs = require('fs');
+const path = require('path');
+const BASE = process.argv[2], PROJ = process.argv[3];
+let pass = 0; const failures = [];
+function check(n, c, d) { if (c) { pass++; console.log('  ok   ' + n); } else { failures.push(n + (d ? ' :: ' + d : '')); console.log('  FAIL ' + n + (d ? ' :: ' + d : '')); } }
+const get = async (p) => (await fetch(BASE + p)).json();
+const post = async (p, b) => (await fetch(BASE + p, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b || {}) })).json();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+(async () => {
+  const t0 = Date.now();
+  console.log('\n=== 1. Simplify instructions (real Claude) ===');
+  const plan = await get('/api/today');
+  const a = plan.assignments[0];
+  const raw = (await get('/api/assignments/' + a.id));
+  const s = await post(`/api/assignments/${a.id}/simplify`);
+  check('simplify returned text', !!s.instructions && s.instructions.length > 0);
+  check('simplify is shorter than the raw description', s.instructions.length < 800, `${s.instructions.length} chars`);
+  check('simplify is a short checklist (2-6 lines)', s.instructions.split('\n').filter(Boolean).length <= 6);
+  check('simplify differs from the instant fallback', s.instructions !== raw.instructions_plain);
+  console.log('    ->', JSON.stringify(s.instructions));
+  const cached = await get('/api/assignments/' + a.id);
+  check('simplify cached on the assignment', cached.instructions_ai === s.instructions);
+
+  console.log('\n=== 2. Slide outline (real Claude) ===');
+  const projects = await get('/api/projects');
+  const pd = await Promise.all(projects.map((p) => get('/api/projects/' + p.id)));
+  const slideProj = pd.find((p) => p.build_mode === 'slides');
+  const out = await post(`/api/projects/${slideProj.id}/outline`);
+  check('outline ok', out.ok === true);
+  check('outline honors "6-8 slides" -> 7', out.slides.length === 7, String(out.slides && out.slides.length));
+  check('every slide has a header', out.slides.every((x) => x.title && x.title.trim()));
+  check('slide 1 is the presentation title', !!out.slides[0].title);
+  check('outline writes NO slide content (student does that)',
+    out.slides.slice(1).every((x) => (x.bullets || []).join('').trim() === ''));
+  console.log('    ->', out.slides.map((x) => x.title).join(' | '));
+
+  console.log('\n=== 3. Get unstuck (real Claude) ===');
+  const essay = pd.find((p) => p.build_mode === 'essay' && /American Dream/i.test(p.title));
+  const sample = fs.readFileSync(path.join(PROJ, 'test', 'sample-essay.txt'), 'utf8');
+  // cut the conclusion so there is something genuine to be stuck on
+  const partial = sample.split(/\n\s*\n/).slice(0, 4).join('\n\n');
+  const un = await post(`/api/projects/${essay.id}/unstuck`, {
+    draft: partial,
+    stuck_note: 'the conclusion — paragraph 5 of 5, I keep just repeating my intro',
+  });
+  check('unstuck ok', un.ok === true, JSON.stringify(un.error));
+  check('unstuck used real Claude, not the offline fallback', un.source === 'claude', un.source);
+  check('unstuck read the actual draft', !!un.where_you_are && un.where_you_are.length > 30);
+  check('unstuck says what the section must do', !!un.next && un.next.length > 20);
+  check('unstuck gives 3-5 short notes', un.points.length >= 3 && un.points.length <= 5);
+  check('unstuck notes are fragments, not essay prose', un.points.every((p) => p.length < 90), JSON.stringify(un.points));
+  check('unstuck asks a question', /\?/.test(un.question || ''));
+  console.log('    where:', un.where_you_are);
+  console.log('    next :', un.next);
+  console.log('    hit  :', un.points.join(' | '));
+  console.log('    ask  :', un.question);
+
+  console.log('\n=== 4. Notes file -> flashcards (real Claude) ===');
+  const tests = await get('/api/tests');
+  const t = tests.find((x) => /Cells/i.test(x.name)) || tests[0];
+  const before = await get('/api/tests/' + t.id);
+  const notes = [
+    'CELL BIOLOGY — my messy class notes',
+    '',
+    'the mitochondria makes ATP which is basically the cells energy money',
+    'chloroplasts only in plant cells, they do photosynthesis (sunlight -> sugar)',
+    'ribosomes = protein factories, can be free floating or stuck on the rough ER',
+    'the nucleus holds DNA and controls what the cell does',
+    'osmosis is just diffusion but specifically for water across a membrane',
+    'hypertonic = more solute outside, cell shrinks. hypotonic = cell swells',
+    'mitosis makes 2 identical cells, meiosis makes 4 different sex cells',
+    'prophase metaphase anaphase telophase is the order (PMAT)',
+  ].join('\n');
+  const up = await post(`/api/tests/${t.id}/notes`, {
+    filename: 'my messy cell notes.txt',
+    content_base64: Buffer.from(notes, 'utf8').toString('base64'),
+  });
+  check('notes upload accepted', up.ok === true);
+  let d;
+  for (let i = 0; i < 200; i++) {
+    d = await get('/api/tests/' + t.id);
+    if (d.notes_status !== 'processing') break;
+    await sleep(1000);
+  }
+  check('notes finished processing', d.notes_status === 'done', d.notes_status);
+  check('notes produced flashcards', d.total_cards > before.total_cards, `${before.total_cards} -> ${d.total_cards}`);
+  const usedClaude = !/basic reader/.test(d.notes);
+  check('real Claude read the notes (not the built-in reader)', usedClaude, d.notes.slice(0, 120));
+  check('study notes were written', d.notes.includes('my messy cell notes.txt') && d.notes.length > 200);
+  const fresh = d.due_cards.slice(-6);
+  console.log('    sample cards:');
+  fresh.forEach((c) => console.log('      Q: ' + c.front + '  ->  A: ' + c.back));
+  check('cards look like real Q/A pairs', fresh.every((c) => c.front.length > 3 && c.back.length > 2));
+  check('cards cover the notes content', /ATP|mitochondri|osmosis|nucleus|ribosome|PMAT|mitosis/i.test(JSON.stringify(d.due_cards)));
+
+  console.log('\n=== 5. Class notes: read a photo, then think about it (real Claude) ===');
+  // Own block — the earlier sections already use `tests`, `before` and friends.
+  {
+  // A rendered notes page, deliberately containing filler a good reader should
+  // throw away: a page/homework reminder and a teacher aside.
+  const notesPng = fs.readFileSync(path.join(PROJ, 'test', 'sample-notes.png')).toString('base64');
+  const allClasses = await get('/api/classes');
+  const allTests = await get('/api/tests');
+  const cls = allClasses.find((c) => allTests.some((t) => t.class_name === c.name));
+  const target = allTests.find((t) => t.class_name === cls.name);
+
+  const up = await post(`/api/classes/${cls.id}/notes`, { filename: 'sample-notes.png', content_base64: notesPng });
+  check('uploading the photo starts a read', up.ok === true && up.note.status === 'reading');
+  let note = up.note;
+  for (let i = 0; i < 60 && note.status === 'reading'; i++) { await sleep(3000); note = await get('/api/notes/' + up.note.id); }
+  check('Claude read the photo', note.status === 'ready', note.error);
+  check('the typed-up text is substantial', (note.text || '').length > 300, String((note.text || '').length));
+  check('it transcribed the actual content', /glycolysis/i.test(note.text) && /krebs/i.test(note.text));
+  check('it gave the note a title', !!note.title && note.title !== 'Untitled note' && note.title.length < 60);
+  console.log('    title ->', note.title);
+
+  const cardsBefore = (await get('/api/tests/' + target.id)).total_cards;
+  const attached = await post(`/api/notes/${note.id}/add-to-test`, { test_id: target.id });
+  check('adding it to a test starts the thinking step', attached.ok === true);
+  let link = null;
+  for (let i = 0; i < 80; i++) {
+    await sleep(3000);
+    const n = await get('/api/notes/' + note.id);
+    link = n.tests.find((t) => t.test_id === target.id);
+    if (link && link.status !== 'thinking') break;
+  }
+  check('Claude finished thinking', link && link.status === 'done', link && link.error);
+  check('it produced a sensible number of cards', link.cards >= 5 && link.cards <= 30, String(link.cards));
+  const after = await get('/api/tests/' + target.id);
+  check('the cards landed on the test', after.total_cards === cardsBefore + link.cards);
+  check('the test page shows the note', after.class_notes.some((n) => n.id === note.id));
+
+  const made = after.due_cards.filter((c) => /respiration|glycolysis|krebs|ATP|electron|ferment|aerobic|pyruvate|mitochondri/i.test(c.front + c.back));
+  check('the cards are about the material', made.length >= 5, String(made.length));
+  console.log('    sample cards:');
+  after.due_cards.slice(-5).forEach((c) => console.log('      Q: ' + c.front + '  ->  A: ' + c.back));
+
+  // The real point of the feature: it decided what NOT to make a card from.
+  const all = JSON.stringify(after.due_cards);
+  check('it ignored the homework reminder', !/142|questions 3-11|friday/i.test(all));
+  check('it ignored the teacher aside', !/alvarez|on the test!!/i.test(all));
+  // Card count is a bad proxy — a line holding three facts should become three
+  // cards. What naive splitting actually looks like is fronts that are verbatim
+  // lines of the note, so that is what this checks for.
+  const noteLines = note.text.split('\n').map((l) => l.replace(/\s+/g, ' ').trim().toLowerCase()).filter((l) => l.length > 15);
+  const copied = after.due_cards.filter((c) => noteLines.includes(c.front.replace(/\s+/g, ' ').trim().toLowerCase()));
+  check('no card is just a line of the note copied out', copied.length === 0, copied.map((c) => c.front).join(' | '));
+  check('the fronts are written as questions or terms, not sentences from the page',
+    made.filter((c) => /\?$/.test(c.front.trim()) || c.front.trim().split(/\s+/).length <= 6).length >= Math.ceil(made.length * 0.6),
+    made.map((c) => c.front).join(' | '));
+
+  await post(`/api/notes/${note.id}/delete`);
+  check('cleaning up removes the note and its cards',
+    (await get('/api/tests/' + target.id)).total_cards === cardsBefore);
+  }
+
+  console.log(`\n================ AI RESULT (${Math.round((Date.now() - t0) / 1000)}s) ================`);
+  console.log(`passed: ${pass}   failed: ${failures.length}`);
+  if (failures.length) { console.log('\nFAILURES:'); failures.forEach((f) => console.log('  - ' + f)); }
+  process.exit(failures.length ? 1 : 0);
+})().catch((e) => { console.error('AI HARNESS CRASH:', e); process.exit(2); });

@@ -1,0 +1,24 @@
+{
+  "name": "slate-school-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Slate — a local school tracker that syncs Canvas and paces your work.",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node src/seed.js",
+    "clear": "node tools/clear-data.js",
+    "clear:all": "node tools/clear-data.js --all",
+    "sync": "node src/cli-sync.js",
+    "test": "node --test",
+    "drive": "node tools/drive/run.js",
+    "drive:all": "node tools/drive/run.js --all",
+    "drive:loop": "node tools/drive/run.js --loop",
+    "build:installer": "node tools/installer/build.js",
+    "push": "node tools/installer/push.js",
+    "shots": "node tools/shots/run.js"
+  }
+}
