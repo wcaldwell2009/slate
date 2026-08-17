@@ -2300,3 +2300,223 @@ test('Canvas saying it is turned in counts as done', () => {
   assert.equal(r.notSubmitted.status, 'todo', 'nothing turned in, so it carries over');
   assert.equal(r.notSubmitted.completed_day, null);
 });
+
+// ---- Ask Claude ----------------------------------------------------------
+// The chat is the one place in Slate where the student types freely at a model
+// that knows their assignment AND their draft. What keeps it on the right side
+// of the no-ghostwriting rule is entirely in the prompt, so the prompt gets
+// pinned here the same way aiCheck's "no reasons list" rule is.
+test('the chat prompt refuses to write the assignment, in as many words', () => {
+  const chat = require('../src/assignmentChat');
+  const rules = chat.TUTOR_RULES;
+  assert.match(rules, /NEVER write any part of the assignment/,
+    'the ban has to be stated, not implied');
+  assert.match(rules, /If they ask you to write it/,
+    'it must refuse on request rather than quietly complying');
+  assert.match(rules, /no thesis statements/i);
+  assert.match(rules, /Rewriting it is not/,
+    'quoting the draft is fine, rewriting it is the line');
+});
+
+test('the chat sends the assignment, the draft and the history', () => {
+  const chat = require('../src/assignmentChat');
+  const p = chat.buildPrompt(
+    {
+      title: 'Founding Document Analysis',
+      class_name: 'English IV',
+      raw_description: '<p>Pick a document and analyse it.</p>',
+      attachment_text: 'RUBRIC: five paragraphs minimum.',
+      draft_text: 'The Constitution was built out of compromise.',
+    },
+    [{ role: 'you', text: 'where do I start?' }, { role: 'claude', text: 'pick the document first' }],
+    'is my thesis strong enough?'
+  );
+  assert.ok(p.includes('Founding Document Analysis'), 'the assignment');
+  assert.ok(p.includes('Pick a document and analyse it.'), 'instructions, with the HTML stripped');
+  assert.ok(!p.includes('<p>'), 'no raw HTML goes to the model');
+  assert.ok(p.includes('RUBRIC: five paragraphs minimum.'), 'what was in the attached file');
+  assert.ok(p.includes('The Constitution was built out of compromise.'), 'the draft');
+  assert.ok(p.includes('where do I start?') && p.includes('pick the document first'), 'the conversation so far');
+  assert.ok(p.includes('is my thesis strong enough?'), 'and the new question');
+  assert.match(p, /\{"reply"/, 'structured output, per round 18 — never raw stdout');
+});
+
+test('an empty draft says so rather than pretending there is one', () => {
+  const chat = require('../src/assignmentChat');
+  const p = chat.buildPrompt({ title: 'x', draft_text: '' }, [], 'help');
+  assert.match(p, /has not written anything yet/);
+});
+
+test('the chat reply survives whatever wrapping Claude puts round it', () => {
+  const { readReply } = require('../src/assignmentChat');
+  assert.equal(readReply('{"reply":"plain answer"}'), 'plain answer');
+  assert.equal(readReply('Sure!\n{"reply":"the answer"}'), 'the answer',
+    'a preamble outside the JSON is discarded');
+  // Claude Code appends its own "Sources:" block after the JSON, which the
+  // parser drops — which is why the prompt asks for sources INSIDE the string.
+  assert.equal(readReply('{"reply":"answer"}\n\nSources:\n- https://example.com'), 'answer');
+  assert.equal(readReply('{"reply":"line one\nline two"}'), 'line one\nline two',
+    'a real newline inside the string is repaired, not a parse failure');
+  assert.equal(readReply('it just talked instead'), 'it just talked instead',
+    'ignoring the JSON must not lose the whole message');
+  assert.equal(readReply('  '), null, 'nothing at all is a failure');
+});
+
+test('chat history is trimmed from the front, never the back', () => {
+  const { transcript } = require('../src/assignmentChat');
+  const many = Array.from({ length: 40 }, (_, i) => ({ role: i % 2 ? 'claude' : 'you', text: 'msg ' + i }));
+  const t = transcript(many);
+  assert.ok(t.includes('msg 39'), 'the newest turn always survives');
+  assert.ok(!t.includes('msg 0'), 'the oldest falls off');
+  assert.ok(t.split('\n\n').length <= 12);
+});
+
+// Will's own ~/.claude/settings.json injects his working rules ("start every
+// reply with hey will") into EVERY claude on this machine, this app's hidden
+// calls included. That is the actual source of the round 18 bug. Asserted on
+// the source because the leak only shows up against a real CLI.
+test('the hidden claude never loads the machine owner personal settings', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'claude.js'), 'utf8');
+  assert.match(src, /'--setting-sources',\s*''/,
+    'viaCli must pass --setting-sources "" or personal instructions leak into student-facing text');
+  const call = src.slice(src.indexOf('function viaCli'), src.indexOf('function viaCli') + 700);
+  assert.ok(call.includes('NO_PERSONAL_SETTINGS'), 'and it has to be on the args the spawn actually uses');
+});
+
+// ---- proofreading --------------------------------------------------------
+// The ONLY path where a model changes what Will wrote. The prompt asks for
+// mechanical corrections; proofread.js is what actually enforces it, so this is
+// the guardrail and it gets tested like one.
+test('proofreading lets an ordinary correction through', () => {
+  const { applyEdits } = require('../src/proofread');
+  const draft = 'Their going to the shop. i saw it hapen yesterday.';
+  const out = applyEdits({ html: null, text: draft }, [
+    { find: 'Their going', replace: 'They are going', why: 'wrong word' },
+    { find: 'i saw', replace: 'I saw', why: 'capital I' },
+    { find: 'hapen', replace: 'happen', why: 'spelling' },
+  ]);
+  assert.equal(out.applied.length, 3);
+  assert.equal(out.skipped.length, 0);
+  assert.equal(out.text, 'They are going to the shop. I saw it happen yesterday.');
+});
+
+test('proofreading refuses to rewrite a sentence', () => {
+  const { applyEdits } = require('../src/proofread');
+  const draft = 'The war was bad and lots of people died because of it in the end.';
+  const out = applyEdits({ html: null, text: draft }, [{
+    find: 'The war was bad and lots of people died because of it in the end.',
+    replace: 'The conflict proved catastrophic, claiming countless lives before its conclusion.',
+    why: 'stronger wording',
+  }]);
+  assert.equal(out.applied.length, 0, 'a reword must never reach the draft');
+  assert.equal(out.text, draft, 'the draft is untouched');
+  assert.match(out.skipped[0].reason, /rewrites the sentence|adds new writing/);
+});
+
+test('proofreading refuses text that is not already in the draft', () => {
+  const { applyEdits } = require('../src/proofread');
+  const draft = 'One short line.';
+  // Passes the mechanical test on its own, so this isolates the other gate:
+  // the text being corrected has to be the student's, sitting in the draft.
+  const out = applyEdits({ html: null, text: draft }, [
+    { find: 'teh', replace: 'the', why: 'spelling' },
+  ]);
+  assert.equal(out.applied.length, 0);
+  assert.equal(out.text, draft);
+  assert.match(out.skipped[0].reason, /could not find/);
+
+  // And inventing a whole new sentence — the shape a ghostwriter would use —
+  // is refused whichever gate catches it first.
+  const invented = applyEdits({ html: null, text: draft }, [
+    { find: 'A sentence that is not there', replace: 'Something brand new', why: 'add' },
+  ]);
+  assert.equal(invented.applied.length, 0);
+  assert.equal(invented.text, draft);
+});
+
+test('proofreading will not replace something that appears twice', () => {
+  const { applyEdits } = require('../src/proofread');
+  // Ambiguous: Slate cannot tell which one was meant, so it changes neither.
+  const out = applyEdits({ html: null, text: 'teh cat and teh dog' }, [
+    { find: 'teh', replace: 'the', why: 'spelling' },
+  ]);
+  assert.equal(out.applied.length, 0);
+  assert.equal(out.text, 'teh cat and teh dog');
+});
+
+test('proofreading counts a punctuation-only change as safe however long', () => {
+  const { applyEdits, onlyPunctuationOrCase } = require('../src/proofread');
+  const long = 'however the evidence is clear and the argument holds up under scrutiny';
+  assert.ok(onlyPunctuationOrCase(long, 'However, the evidence is clear, and the argument holds up under scrutiny.'));
+  const out = applyEdits({ html: null, text: long + ' end' }, [
+    { find: long, replace: 'However, the evidence is clear, and the argument holds up under scrutiny.', why: 'commas' },
+  ]);
+  assert.equal(out.applied.length, 1, 'same words, only punctuation and capitals moved');
+});
+
+test('proofreading caps how much can change at once', () => {
+  const { applyEdits, MAX_EDITS, MAX_FIND_CHARS } = require('../src/proofread');
+  const many = Array.from({ length: MAX_EDITS + 5 }, (_, i) => ({ find: 'w' + i, replace: 'x' + i, why: '' }));
+  const out = applyEdits({ html: null, text: many.map((e) => e.find).join(' ') }, many);
+  assert.ok(out.applied.length <= MAX_EDITS, 'no more than MAX_EDITS in one message');
+  assert.ok(out.skipped.some((s) => /too many/.test(s.reason)));
+  // And no single edit may swallow a paragraph.
+  const para = 'x'.repeat(MAX_FIND_CHARS + 10);
+  const big = applyEdits({ html: null, text: para }, [{ find: para, replace: para + '!', why: '' }]);
+  assert.equal(big.applied.length, 0);
+  assert.match(big.skipped[0].reason, /too much text/);
+});
+
+test('proofreading edits the formatted draft, entities and all', () => {
+  const { applyEdits } = require('../src/proofread');
+  const html = '<p>Fish &amp; chips is teh best.</p>';
+  const out = applyEdits({ html, text: 'Fish & chips is teh best.' }, [
+    { find: 'teh', replace: 'the', why: 'spelling' },
+  ]);
+  assert.equal(out.applied.length, 1);
+  assert.equal(out.html, '<p>Fish &amp; chips is the best.</p>');
+  assert.ok(!out.html.includes('&amp;amp;'), 'the entity must not be double-escaped');
+  // A phrase whose & is escaped in the markup still has to be findable.
+  const amp = applyEdits({ html, text: 'Fish & chips is teh best.' }, [
+    { find: 'Fish & chips is', replace: 'Fish and chips is', why: 'spell it out' },
+  ]);
+  assert.equal(amp.applied.length, 1);
+  assert.equal(amp.html, '<p>Fish and chips is teh best.</p>');
+});
+
+test('the transcript reports what actually changed, not what Claude claimed', () => {
+  const { applyEdits, summarise } = require('../src/proofread');
+  const out = applyEdits({ html: null, text: 'i went home.' }, [
+    { find: 'i went', replace: 'I went', why: 'capital I' },
+    { find: 'i went home.', replace: 'I made my way back to the house that evening.', why: 'nicer' },
+  ]);
+  const note = summarise(out.applied, out.skipped);
+  assert.match(note, /Changed in your draft/);
+  assert.match(note, /Left alone/, 'a refused edit has to be reported, not silently dropped');
+  assert.ok(!out.text.includes('made my way back'));
+});
+
+test('the chat prompt allows corrections and bans rewriting in the same breath', () => {
+  const { TUTOR_RULES, readEdits } = require('../src/assignmentChat');
+  assert.match(TUTOR_RULES, /ONLY mechanical corrections/);
+  assert.match(TUTOR_RULES, /NEVER use edits to reword, improve, tighten, expand or restructure/);
+  assert.match(TUTOR_RULES, /Making their writing better IS writing it for them/);
+  // Edits only ever come out of real JSON: a reply that ignored the format
+  // must not be able to change the draft.
+  assert.deepEqual(readEdits('just some prose about your draft'), []);
+  assert.deepEqual(readEdits('{"reply":"ok","edits":[{"find":"a","replace":"b","why":"c"}]}'),
+    [{ find: 'a', replace: 'b', why: 'c' }]);
+  assert.deepEqual(readEdits('{"reply":"ok"}'), []);
+});
+
+// Two tools, and only those two. This is the second place in Slate that hands
+// Claude Code the web; it has no business reading or writing this machine.
+test('the chat gets the web and nothing else', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'assignmentChat.js'), 'utf8');
+  assert.match(src, /const CHAT_TOOLS = 'WebSearch,WebFetch';/,
+    'exactly those two tools — adding one here hands the machine over');
+  // Whatever the constant says, the tool list actually handed to Claude has to
+  // be that constant and nothing else.
+  const passed = [...src.matchAll(/allowedTools:\s*([A-Za-z_'"][^,\n]*)/g)].map((m) => m[1].trim());
+  assert.deepEqual(passed, ['CHAT_TOOLS'], 'the only tool list passed is CHAT_TOOLS');
+});

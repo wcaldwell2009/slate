@@ -45,6 +45,9 @@ const panel = $('#panel');
 let state = {
   view: 'today', todaySort: 'due', todayTab: 'assignments', doneTab: 'unfinished',
   workId: null, classId: null, classTab: 'grades',
+  // Ask Claude: open or shut. Held here rather than in the DOM so the panel
+  // stays open across a re-render of the page underneath it.
+  chatOpen: false,
   // How far ahead Tests & Quizzes is looking, in weeks. 0 = all of them.
   testWeeks: 0,
 };
@@ -289,6 +292,7 @@ function richEditor(html, { docStyle, onChange, onStyle, tall } = {}) {
     node: wrap,
     surface,
     getHtml: () => surface.innerHTML,
+    setHtml: (v) => { surface.innerHTML = String(v == null ? '' : v) || '<p></p>'; },
     getText: () => surface.textContent || '',
     style,
   };
@@ -326,6 +330,16 @@ function registerDraft(assignmentId, source, onSaved) {
         saved = now;
       }
     },
+    // The server changed the draft under us — Claude's grammar corrections are
+    // the only thing that does this. Put the new text on screen and treat it as
+    // already saved, or the next flush would push the uncorrected copy back
+    // over the top of it.
+    adopt(value) {
+      if (value == null) return;
+      if (isRich) source.setHtml(String(value));
+      else source.value = String(value);
+      saved = read();
+    },
   };
   pageDraft = handle;
   return handle;
@@ -334,6 +348,11 @@ function registerDraft(assignmentId, source, onSaved) {
 // Study timer cleanup handle (tests page). Focus timers were removed from
 // assignment and project pages — studying is the only place a timer helps.
 let pageTimer = null;
+
+// An in-flight "Ask Claude" request. Leaving the page aborts it, which closes
+// the response, which kills the hidden claude process on the server — the same
+// chain the essay coach uses.
+let pageChat = null;
 
 window.addEventListener('beforeunload', () => {
   if (pageTimer) pageTimer.beacon();
@@ -626,6 +645,7 @@ function buildTextWork(body, a) {
   };
   actions.appendChild(submit); actions.appendChild(complete);
   body.appendChild(actions);
+  chatWidget(body, a);
 }
 
 // Handing work in. Two ways, always the student's choice:
@@ -1263,8 +1283,228 @@ function buildGuideWork(body, a) {
   };
   actions.appendChild(complete);
   body.appendChild(actions);
+  chatWidget(body, a);
 }
 
+// ---- Ask Claude ----------------------------------------------------------
+// A support-desk style chat widget pinned to the bottom-right corner: a round
+// launcher button that expands into a panel sitting in the same corner. Every
+// send goes to a hidden `claude -p` on the server with the assignment, the
+// attachment text and whatever has been typed so far, and it can search the web
+// to answer properly.
+//
+// THE PANEL MUST NOT COVER THE WORK. Opening it adds `chat-open` to <body>,
+// which reserves a lane down the right-hand side of the layout so the page
+// reflows out from under the panel instead of hiding behind it. That is the
+// whole difference between this and a floating overlay, and it is what Will
+// asked for.
+//
+// It lives inside #app and is rebuilt on every render like everything else —
+// position:fixed does not care who its parent is. Open/closed survives a
+// re-render because it is held in `state.chatOpen`, not in the DOM.
+//
+// It is a TUTOR, not a writer — the server prompt forbids it producing anything
+// pasteable and the panel says the same thing. See src/assignmentChat.js.
+
+// Reserving (or releasing) the lane the panel sits in. Called on open, on close
+// and by render() when leaving the page, so no other view inherits the gap.
+function setChatLane(on) {
+  if (document.body && document.body.classList) document.body.classList.toggle('chat-open', !!on);
+}
+
+// Replies are prose. Blank lines become paragraphs and single newlines stay as
+// line breaks; everything is escaped first, so nothing Claude says can put
+// markup on the page.
+function chatParagraphs(text) {
+  const wrap = el('div', 'chat-text');
+  String(text || '').split(/\n{2,}/).forEach((block) => {
+    const t = block.trim();
+    if (t) wrap.appendChild(el('p', null, esc(t).replace(/\n/g, '<br>')));
+  });
+  if (!wrap.children.length) wrap.appendChild(el('p', null, esc(text || '')));
+  return wrap;
+}
+
+function chatBubble(m) {
+  const row = el('div', 'chat-msg chat-' + (m.role === 'claude' ? 'claude' : 'you'));
+  row.appendChild(el('div', 'chat-who', m.role === 'claude' ? 'Claude' : 'You'));
+  row.appendChild(chatParagraphs(m.text));
+  return row;
+}
+
+function chatWidget(body, a) {
+  const root = el('div', 'chat-root');
+
+  // ---- the closed state: one button in the corner
+  const launcher = el('button', 'chat-launcher');
+  launcher.title = 'Ask Claude about this assignment';
+  // Drawn, not an emoji. Round 24 took every emoji out of Slate and a speech
+  // bubble from the font renders as a grey blob on the sage pill anyway.
+  launcher.appendChild(el('span', 'chat-launcher-icon',
+    '<svg viewBox="0 0 24 24" width="17" height="17" aria-hidden="true">'
+    + '<path d="M4 5.5h16v11H9.5L5.5 20v-3.5H4z" fill="none" stroke="currentColor"'
+    + ' stroke-width="1.9" stroke-linejoin="round"/></svg>'));
+  launcher.appendChild(el('span', 'chat-launcher-label', 'Ask Claude'));
+
+  // ---- the open state: the panel, same corner
+  const wrap = el('div', 'chat-panel');
+  const head = el('div', 'chat-head');
+  const heading = el('div', 'chat-head-text');
+  heading.appendChild(el('div', 'chat-title', 'Ask Claude'));
+  heading.appendChild(el('div', 'chat-sub', 'About this assignment. It will not write it for you.'));
+  head.appendChild(heading);
+  const clear = el('button', 'chat-icon-btn hidden', 'Clear');
+  clear.title = 'Delete this conversation';
+  const close = el('button', 'chat-icon-btn chat-close', '&#10005;');
+  close.title = 'Close';
+  head.appendChild(clear);
+  head.appendChild(close);
+  wrap.appendChild(head);
+
+  const log = el('div', 'chat-log');
+  wrap.appendChild(log);
+
+  const foot = el('div', 'chat-foot');
+  const status = el('div', 'chat-status', '');
+  const box = el('textarea', 'chat-input');
+  // Deliberately generic: this panel is on maths worksheets and history essays
+  // alike, and a subject-specific example looks wrong on most of them.
+  box.placeholder = 'Ask anything about this assignment…';
+  box.rows = 2;
+  const row = el('div', 'chat-actions');
+  const send = el('button', 'btn btn-accent chat-send', 'Send');
+  const stop = el('button', 'btn btn-ghost chat-stop hidden', 'Stop');
+  row.appendChild(send); row.appendChild(stop);
+  foot.appendChild(status);
+  foot.appendChild(box);
+  foot.appendChild(row);
+  wrap.appendChild(foot);
+
+  root.appendChild(launcher);
+  root.appendChild(wrap);
+  body.appendChild(root);
+
+  // ---- open / closed -------------------------------------------------------
+  const paint = () => {
+    launcher.classList.toggle('hidden', !!state.chatOpen);
+    wrap.classList.toggle('hidden', !state.chatOpen);
+    setChatLane(state.chatOpen);
+  };
+  const open = () => {
+    state.chatOpen = true;
+    paint();
+    if (typeof box.focus === 'function') box.focus();
+    showNewest();
+  };
+  const shut = () => { state.chatOpen = false; paint(); };
+  launcher.onclick = open;
+  close.onclick = shut;
+
+  // ---- the conversation ----------------------------------------------------
+  let messages = [];
+  const draw = () => {
+    log.innerHTML = '';
+    if (!messages.length) {
+      const blank = el('div', 'chat-empty');
+      blank.appendChild(el('p', null, 'Ask about anything here — what the assignment means, '
+        + 'background research, or whether what you have written so far holds up.'));
+      blank.appendChild(el('p', null, 'It can look things up on the web.'));
+      log.appendChild(blank);
+      clear.classList.add('hidden');
+    } else {
+      messages.forEach((m) => log.appendChild(chatBubble(m)));
+      clear.classList.remove('hidden');
+    }
+  };
+  // The log is the scrolling part of the panel, so a new reply lands below the
+  // fold. Guarded: the drive harness's DOM shim has no scrollTop worth setting.
+  function showNewest() {
+    if (typeof log.scrollHeight === 'number') log.scrollTop = log.scrollHeight;
+  }
+  draw();
+  paint();
+
+  get(`/api/assignments/${a.id}/chat`)
+    .then((r) => { if (r && r.messages) { messages = r.messages; draw(); showNewest(); } })
+    .catch(() => { /* an empty chat is a fine starting point */ });
+
+  // Only touches the controls. The status line is set by the caller, because
+  // finishing is exactly when an error message needs to survive.
+  const busy = (on) => {
+    send.disabled = on;
+    box.disabled = on;
+    clear.disabled = on;
+    stop.classList.toggle('hidden', !on);
+  };
+
+  const ask = async () => {
+    const question = box.value.trim();
+    if (!question || send.disabled) return;
+    // Send the newest text, not whatever was last autosaved — Claude is being
+    // asked about the draft, so it has to be the draft that is on screen.
+    if (pageDraft) { try { await pageDraft.flush(); } catch { /* send it anyway */ } }
+    box.value = '';
+    // Show the question straight away; the server only commits it if Claude answers.
+    messages = messages.concat([{ role: 'you', text: question }]);
+    draw();
+    showNewest();
+    busy(true);
+    status.textContent = 'Thinking… this can take a minute if it is looking things up.';
+    const ac = new AbortController();
+    pageChat = ac;
+    try {
+      const res = await fetch(`/api/assignments/${a.id}/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ question }),
+        signal: ac.signal,
+      });
+      const r = await res.json();
+      if (r && r.ok) {
+        messages = r.messages;
+        status.textContent = '';
+        // Grammar corrections land in the editor behind the panel. Told to the
+        // draft handle as well as the DOM, so the next autosave doesn't put the
+        // uncorrected version straight back.
+        if (r.draft && pageDraft) {
+          pageDraft.adopt(r.draft.html == null ? r.draft.text : r.draft.html);
+          status.textContent = r.draft.applied === 1
+            ? '1 fix applied to your writing.'
+            : `${r.draft.applied} fixes applied to your writing.`;
+        }
+        draw();
+        showNewest();
+      } else {
+        // Nothing was saved, so drop the optimistic bubble and give the question back.
+        messages = messages.slice(0, -1);
+        box.value = (r && r.question) || question;
+        status.textContent = (r && r.error) || 'That did not work. Try again.';
+        draw();
+      }
+    } catch (err) {
+      messages = messages.slice(0, -1);
+      box.value = question;
+      draw();
+      status.textContent = ac.signal.aborted ? 'Stopped.' : 'That did not work. Try again.';
+    } finally {
+      if (pageChat === ac) pageChat = null;
+      busy(false);
+    }
+  };
+
+  send.onclick = ask;
+  stop.onclick = () => { if (pageChat) pageChat.abort(); };
+  // Enter sends, Shift+Enter makes a new line — what a chat box is expected to do.
+  box.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ask(); }
+  };
+  clear.onclick = async () => {
+    await post(`/api/assignments/${a.id}/chat/clear`, {});
+    messages = [];
+    status.textContent = '';
+    draw();
+  };
+}
 // Files the teacher attached in Canvas. Clicking one downloads it (once) and
 // opens it in whatever program this computer already uses for that type —
 // Word for a .docx, Excel for a .xlsx, the PDF reader for a PDF. Slate has no
@@ -2964,6 +3204,11 @@ async function render() {
       if (pageDraft) { const d = pageDraft; pageDraft = null; try { await d.flush(); } catch { /* keep going */ } }
       // Leaving the work page: stop the focus timer and bank its time.
       if (pageTimer) { pageTimer.dispose(); pageTimer = null; }
+      // …and drop any question still waiting on Claude. The reserved lane goes
+      // with it: only an assignment page has a chat, so any other view would
+      // otherwise render with a gap down its right-hand side.
+      if (pageChat) { try { pageChat.abort(); } catch { /* already done */ } pageChat = null; }
+      setChatLane(false);
       app.innerHTML = '';
       const tabView = TAB_FOR[state.view] || state.view;
       document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === tabView));

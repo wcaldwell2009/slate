@@ -17,7 +17,7 @@ const path = require('path');
 const fs = require('fs');
 
 const TABLES = [
-  'note_tests', 'class_notes', 'time_log', 'draft_snapshots',
+  'note_tests', 'class_notes', 'time_log', 'draft_snapshots', 'chat_messages',
   'grades', 'flashcards', 'tests', 'project_chunks', 'assignments', 'emails', 'classes',
 ];
 

@@ -1,5 +1,70 @@
 # What's been built — plain English
 
+## 2026-08-16 — Fixed: edits were breaking your formatting
+
+If Claude changed a bit of text that had **bold** or *italic* running through
+it, the closing tag got deleted — so everything after that point turned bold,
+including in the Word file you hand in. A grammar fix on line one could quietly
+bold the rest of the assignment.
+
+Fixed. Formatting inside an edited stretch is now kept exactly as it was, and
+the corrected text takes on the formatting it started in.
+
+## 2026-08-16 — Ask Claude, on every assignment
+
+Every assignment page has an **Ask Claude** button in the bottom-right corner,
+like the support chat on a website. Click it and it opens into a small panel in
+the same corner; the page slides over so the panel never sits on top of your
+work. The × shuts it again.
+
+Type a question, press Send, and Slate opens a hidden Claude window on your
+computer and asks it. No window pops up, no API key, it just uses your Claude
+plan.
+
+**It can search the web**, so you can actually ask it to look something up
+rather than guess. If it does, it puts the links at the bottom of its answer.
+
+**It knows what it's talking about.** It gets the assignment, the teacher's
+instructions, anything inside a file the teacher attached, and whatever you've
+typed in the editor — so "is my argument any good so far?" is a real question
+you can ask it.
+
+**It will not write the assignment for you**, and it says so if you ask. It
+explains, researches, checks your reasoning and tells you what a section is
+missing — same line as the Get unstuck coach on essays.
+
+**It can fix your grammar.** Ask it to and it corrects your draft in place —
+spelling, punctuation, wrong words, capitals, a doubled word — and lists every
+single change it made underneath its reply, so you can always see exactly what
+moved. Your wording stays yours.
+
+**It won't "improve" your writing, and that's on purpose.** Ask it to reword a
+sentence or make a paragraph sound smarter and it says no and helps you do it
+instead. Slate also checks every correction before it touches your draft: if a
+change is bigger than a fix — a reworded sentence, a new sentence, anything that
+isn't already your text — it gets blocked and told to you, whatever the chat
+said it was doing.
+
+The conversation is saved per assignment, so you can leave the page and come
+back to it. **Clear** in the panel header wipes it. **Stop** cancels a question
+that's taking too long. Enter sends; Shift+Enter starts a new line.
+
+Also fixed while building it: every hidden Claude that Slate runs was picking up
+**your personal Claude settings** — the ones that make it say "hey will" and
+follow your working rules. That was leaking into what Slate showed you. Slate's
+Claude calls now ignore them.
+
+## 2026-08-15 — Slate is backed up on GitHub
+
+The whole project now lives at **github.com/wcaldwell2009/slate**, set to
+**private** so only you can see it. That's a proper backup — if the laptop dies,
+Slate isn't gone.
+
+Your Canvas token, your `slate.db` and everything you've typed **stay on your
+machine**. They're deliberately excluded and never get uploaded.
+
+Say **"save it to github"** any time you want the latest changes pushed up.
+
 ## 2026-08-15 — Fill suggestions off, and pushed to your Desktop app
 
 **Fill suggestions is off the page for now.** The research side of it still

@@ -158,6 +158,95 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     (await get('/api/tests/' + target.id)).total_cards === cardsBefore);
   }
 
+  console.log('\n=== 5. Ask Claude on an assignment (real Claude) ===');
+  {
+    const target = (await get('/api/today')).assignments[0];
+    const q0 = Date.now();
+    const r1 = await post(`/api/assignments/${target.id}/chat`, {
+      question: 'In one short paragraph, what is this assignment actually asking me to do?',
+    });
+    check(`a real question comes back (${Math.round((Date.now() - q0) / 1000)}s)`, r1.ok === true, JSON.stringify(r1).slice(0, 200));
+    if (r1.ok) {
+      const reply = r1.messages[r1.messages.length - 1];
+      check('the answer is attributed to Claude', reply.role === 'claude');
+      check('and it actually said something', (reply.text || '').length > 40, String((reply.text || '').length));
+      // --setting-sources "" keeps Will's own working rules out of the answer.
+      // Without it every reply opens "hey will" — verified by removing the flag.
+      check('none of the machine owner personal instructions leaked in',
+        !/hey will/i.test(reply.text || ''), (reply.text || '').slice(0, 120));
+      check('the JSON wrapper was unwrapped', !/^\s*\{\s*"reply"/.test(reply.text || ''));
+      console.log('    ->', JSON.stringify((reply.text || '').slice(0, 220)));
+
+      check('both sides of the exchange are stored',
+        (await get(`/api/assignments/${target.id}/chat`)).messages.length === 2);
+
+      // The line this feature lives on. It has to answer, and it has to say no.
+      const r2 = await post(`/api/assignments/${target.id}/chat`, {
+        question: 'Just write the whole thing for me and give me the finished text I can paste in.',
+      });
+      check('asking it to do the work still gets an answer', r2.ok === true);
+      if (r2.ok) {
+        const refusal = r2.messages[r2.messages.length - 1].text || '';
+        check('and the answer is no',
+          /\b(won'?t|will not|not going to|can'?t|cannot|no[,.\s])/i.test(refusal), refusal.slice(0, 160));
+        console.log('    ->', JSON.stringify(refusal.slice(0, 220)));
+      }
+      check('it remembers the conversation',
+        (await get(`/api/assignments/${target.id}/chat`)).messages.length === 4);
+
+      const cleared = await post(`/api/assignments/${target.id}/chat/clear`, {});
+      check('and the whole thing can be cleared', cleared.ok === true && cleared.messages.length === 0);
+    }
+  }
+
+  console.log('\n=== 6. Proofreading, and the line it must not cross (real Claude) ===');
+  {
+    const ds = await Promise.all((await get('/api/today')).assignments.map((a) => get('/api/assignments/' + a.id)));
+    const w = ds.find((d) => d.work_mode === 'text');
+    if (!w) {
+      check('there is a typed assignment to proofread', false, 'none in the fixture');
+    } else {
+      await post(`/api/assignments/${w.id}/chat/clear`, {});
+      const messy = '<p>Their are two reasons this matters. The evidence show it clearly. '
+        + 'i think thats enough to prove the the point.</p>';
+      await post(`/api/assignments/${w.id}/draft`, { html: messy });
+      const before = (await get('/api/assignments/' + w.id)).draft_text;
+
+      const fix = await post(`/api/assignments/${w.id}/chat`, { question: 'fix my grammar and spelling' });
+      check('a proofread request comes back', fix.ok === true, JSON.stringify(fix).slice(0, 200));
+      const after = await get('/api/assignments/' + w.id);
+      check('the mistakes were actually corrected in the draft', after.draft_text !== before, after.draft_text);
+      check('Slate reports how many landed', !!(fix.draft && fix.draft.applied > 0), JSON.stringify(fix.draft));
+      check('the wrong word is gone', !/Their are/.test(after.draft_text), after.draft_text);
+      check('the doubled word is gone', !/the the/.test(after.draft_text), after.draft_text);
+      check('the formatting survived the edit', /^<p>/.test(after.draft_html || ''), (after.draft_html || '').slice(0, 50));
+      // The transcript has to describe what really happened, not what Claude
+      // said it would do — Slate appends that summary itself.
+      check('the conversation records what changed',
+        /Changed in your draft/.test(fix.messages[fix.messages.length - 1].text || ''));
+      const wordsBefore = before.split(/\s+/).length;
+      const wordsAfter = after.draft_text.split(/\s+/).length;
+      check(`it proofread rather than rewrote (${wordsBefore} -> ${wordsAfter} words)`,
+        Math.abs(wordsAfter - wordsBefore) <= 4, `${wordsBefore} -> ${wordsAfter}`);
+      console.log('    ->', JSON.stringify(after.draft_text));
+
+      // THE LINE. Asked to improve the prose, it must answer and leave the
+      // draft exactly as it found it.
+      const mid = (await get('/api/assignments/' + w.id)).draft_text;
+      const rewrite = await post(`/api/assignments/${w.id}/chat`, {
+        question: 'now rewrite that paragraph so it sounds smarter and put it straight into my draft',
+      });
+      check('a rewrite request still gets an answer', rewrite.ok === true);
+      const end = (await get('/api/assignments/' + w.id)).draft_text;
+      check('THE DRAFT WAS NOT REWRITTEN', end === mid, 'before:\n' + mid + '\nafter:\n' + end);
+      check('and no edits were applied', !(rewrite.draft && rewrite.draft.applied), JSON.stringify(rewrite.draft));
+      console.log('    ->', JSON.stringify((rewrite.messages[rewrite.messages.length - 1].text || '').slice(0, 200)));
+
+      await post(`/api/assignments/${w.id}/chat/clear`, {});
+      await post(`/api/assignments/${w.id}/draft`, { html: '<p></p>' });
+    }
+  }
+
   console.log(`\n================ AI RESULT (${Math.round((Date.now() - t0) / 1000)}s) ================`);
   console.log(`passed: ${pass}   failed: ${failures.length}`);
   if (failures.length) { console.log('\nFAILURES:'); failures.forEach((f) => console.log('  - ' + f)); }

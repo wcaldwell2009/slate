@@ -901,6 +901,105 @@ a.attach:hover { border-color: rgba(140, 168, 145, 0.45); }
 .login-mark { color: var(--accent); font-size: 30px; line-height: 1; }
 .login-title { font-size: 26px; font-weight: 600; margin: 0; }
 
+/* ---- Ask Claude: the corner chat widget ----
+   Own `chat-` prefix on every class. Three collisions have cost a round in this
+   project (.dl-type, .slide-title, .page-body), so a new component gets a
+   namespace whether or not anything currently clashes.
+
+   A launcher button in the bottom-right corner that expands into a panel in the
+   same corner, the way a support chat works. Both are position:fixed, so the
+   widget can be built inside #app and rebuilt on every render without moving. */
+.chat-root { position: static; }
+
+/* THE LANE. While the panel is open the layout gains a right-hand gutter the
+   width of the panel, so the page shuffles left instead of hiding underneath
+   it. Without this the panel would sit on top of the assignment, which is the
+   one thing it must not do. Transitioned so it reads as the page making room
+   rather than the text jumping. */
+.layout { transition: padding-right 180ms ease; }
+body.chat-open .layout { padding-right: 396px; }
+
+.chat-launcher {
+  position: fixed; right: 22px; bottom: 22px; z-index: 60;
+  display: flex; align-items: center; gap: 9px;
+  background: var(--accent); color: #14181D;
+  border: none; border-radius: 999px; padding: 13px 20px 13px 17px;
+  font-family: inherit; font-size: 14.5px; font-weight: 600;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); cursor: pointer;
+  transition: transform 120ms ease, background 120ms ease;
+}
+.chat-launcher:hover { background: #9db9a2; transform: translateY(-1px); }
+.chat-launcher-icon { display: flex; align-items: center; line-height: 1; }
+
+.chat-panel {
+  position: fixed; right: 22px; bottom: 22px; z-index: 60;
+  width: 374px; max-width: calc(100vw - 44px);
+  height: 560px; max-height: calc(100vh - 44px);
+  display: flex; flex-direction: column; overflow: hidden;
+  background: var(--surface); border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 16px; box-shadow: 0 14px 44px rgba(0, 0, 0, 0.55);
+}
+
+.chat-head {
+  flex: none; display: flex; align-items: flex-start; gap: 8px;
+  padding: 13px 12px 13px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  background: var(--surface-2);
+}
+.chat-head-text { flex: 1; min-width: 0; }
+.chat-title { font-size: 15px; font-weight: 600; }
+.chat-sub { font-size: 11.5px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
+.chat-icon-btn {
+  flex: none; background: transparent; color: var(--muted);
+  border: none; border-radius: 7px; padding: 4px 8px;
+  font-family: inherit; font-size: 12px; cursor: pointer;
+}
+.chat-icon-btn:hover { background: rgba(255, 255, 255, 0.07); color: var(--text); }
+.chat-close { font-size: 14px; line-height: 1; padding: 5px 8px; }
+
+/* The only scrolling part of the panel. */
+.chat-log {
+  flex: 1; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 14px 4px;
+}
+.chat-empty { color: var(--muted); font-size: 13px; line-height: 1.55; }
+.chat-empty p { margin: 0 0 8px; }
+.chat-msg { background: var(--surface-2); border-radius: 12px; padding: 10px 12px; max-width: 92%; }
+.chat-msg.chat-you { background: rgba(140, 168, 145, 0.15); align-self: flex-end; }
+.chat-msg.chat-claude { align-self: flex-start; border-left: 2px solid var(--accent); }
+.chat-who {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--muted); margin-bottom: 4px;
+}
+.chat-claude .chat-who { color: var(--accent); }
+.chat-text p { margin: 0 0 8px; font-size: 14px; line-height: 1.55; }
+.chat-text p:last-child { margin-bottom: 0; }
+
+.chat-foot {
+  flex: none; padding: 10px 14px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+.chat-input {
+  width: 100%; resize: none; height: 62px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px;
+  padding: 9px 11px; font-size: 14px; line-height: 1.5; font-family: inherit;
+}
+.chat-input:disabled { opacity: 0.6; }
+.chat-actions { display: flex; gap: 8px; margin-top: 8px; }
+.chat-actions .btn { padding: 7px 16px; font-size: 13.5px; }
+.chat-status { color: var(--muted); font-size: 12px; line-height: 1.4; margin-bottom: 7px; }
+.chat-status:empty { display: none; }
+
+/* No room to give a lane away on a narrow window: the panel goes full width
+   along the bottom and the page keeps all of it. */
+@media (max-width: 860px) {
+  body.chat-open .layout { padding-right: 0; }
+  .chat-panel { right: 12px; left: 12px; bottom: 12px; width: auto; max-height: 70vh; }
+  .chat-launcher { right: 14px; bottom: 14px; }
+}
+
 .hidden { display: none; }
 .mono { font-variant-numeric: tabular-nums; }
 pre.compile { background: var(--surface-2); padding: 16px; border-radius: 10px; white-space: pre-wrap; font-size: 13px; max-height: 320px; overflow: auto; }

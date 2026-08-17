@@ -542,11 +542,136 @@ async function renderView(view, extra = '') {
     check('the file is downloaded afterwards', after.files[0].downloaded === true, after.files[0]);
   }
 
+  section('Ask Claude widget');
+  // Runs with SLATE_NO_AI=1, so Send is expected to come back with a refusal.
+  // What is checked here is that the corner widget wires up, that opening and
+  // closing it behaves, and that a failed send puts the question back in the
+  // box instead of eating it.
+  run('state.chatOpen = false;');
+  await renderView('work', `state.workId = ${textA.id};`);
+  await settle(500);
+  root = appNode();
+  const chatLauncher = buttons(root).find((n) => hasClass(n, 'chat-launcher'));
+  check('the assignment page has a chat launcher in the corner', !!chatLauncher);
+  check('the launcher says what it is', /Ask Claude/.test(chatLauncher.text || ''), chatLauncher.text);
+  const chatPanel = nodesIn(root).find((n) => hasClass(n, 'chat-panel'));
+  check('the panel exists but starts shut', !!chatPanel && chatPanel._classes().includes('hidden'));
+  check('and nothing reserves the side lane while it is shut',
+    !document.body._classes().includes('chat-open'));
+
+  const eChat = errors.length;
+  await chatLauncher.onclick(); await settle(300);
+  check('clicking the launcher opens the panel', !chatPanel._classes().includes('hidden'));
+  check('the launcher gets out of the way', chatLauncher._classes().includes('hidden'));
+  // The lane is what stops the panel sitting on top of the work.
+  check('opening it reserves the lane so the page is not covered',
+    document.body._classes().includes('chat-open'));
+  check('opening it does not throw', errors.length === eChat, errors.slice(eChat).join(' | '));
+
+  root = appNode();
+  check('it says it will not write the work',
+    nodesIn(root).some((n) => hasClass(n, 'chat-sub') && /will not write/i.test(n.text || '')));
+  const chatBox = inputs(root, 'TEXTAREA').find((n) => hasClass(n, 'chat-input'));
+  check('the panel has a question box', !!chatBox);
+  const chatSendBtn = buttons(root).find((n) => hasClass(n, 'chat-send'));
+  const chatStopBtn = buttons(root).find((n) => hasClass(n, 'chat-stop'));
+  check('Send and Stop are both there', !!chatSendBtn && !!chatStopBtn);
+  check('Stop is hidden until something is running', chatStopBtn._classes().includes('hidden'));
+  const chatClearBtn = buttons(root).find((n) => hasClass(n, 'chat-icon-btn') && /Clear/.test(n.text || ''));
+  check('Clear is hidden while there is nothing to clear', !!chatClearBtn && chatClearBtn._classes().includes('hidden'));
+  check('an empty chat explains what to ask it',
+    nodesIn(root).some((n) => hasClass(n, 'chat-empty') && /look things up/i.test(n.text || '')));
+
+  await chatSendBtn.onclick();                 // empty box: must be a no-op, not a crash
+  check('Send with an empty box does nothing and does not throw', errors.length === eChat);
+
+  chatBox.value = 'what is this assignment actually asking for?';
+  await chatSendBtn.onclick();
+  await settle(1200);
+  check('sending a question does not throw', errors.length === eChat, errors.slice(eChat).join(' | '));
+  root = appNode();
+  const chatStatus = nodesIn(root).find((n) => hasClass(n, 'chat-status'));
+  check('a send Claude cannot answer explains itself',
+    !!chatStatus && /switched off/i.test(chatStatus.text || ''), chatStatus && chatStatus.text);
+  const boxAfter = inputs(root, 'TEXTAREA').find((n) => hasClass(n, 'chat-input'));
+  check('and the question goes back in the box rather than being lost',
+    boxAfter.value === 'what is this assignment actually asking for?', boxAfter.value);
+  check('nothing was added to the conversation',
+    nodesIn(root).filter((n) => hasClass(n, 'chat-msg')).length === 0);
+
+  await chatClearBtn.onclick(); await settle(400);
+  check('Clear does not throw either', errors.length === eChat, errors.slice(eChat).join(' | '));
+
+  // Open across a re-render, then shut it properly.
+  await renderView('work', `state.workId = ${textA.id};`);
+  await settle(400);
+  root = appNode();
+  check('the panel is still open after the page re-renders',
+    !nodesIn(root).find((n) => hasClass(n, 'chat-panel'))._classes().includes('hidden'));
+  const chatCloseBtn = buttons(root).find((n) => hasClass(n, 'chat-close'));
+  await chatCloseBtn.onclick(); await settle(300);
+  check('the close button shuts it',
+    nodesIn(root).find((n) => hasClass(n, 'chat-panel'))._classes().includes('hidden'));
+  check('and gives the lane back', !document.body._classes().includes('chat-open'));
+
+  // When Claude corrects the grammar the server changes the draft underneath
+  // the editor. `adopt` is what puts it on screen AND tells the autosave it is
+  // already saved — without that, the next flush pushes the uncorrected copy
+  // straight back over the corrections.
+  run('state.chatOpen = false;');
+  await renderView('work', `state.workId = ${textA.id};`);
+  await settle(500);
+  check('the draft handle can adopt a draft the server changed',
+    run('typeof pageDraft.adopt') === 'function');
+  const draftBeforeAdopt = (await (await fetch(BASE + '/api/assignments/' + textA.id)).json()).draft_html;
+  const putDraft = (html) => fetch(BASE + '/api/assignments/' + textA.id + '/draft', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ html }),
+  });
+  // The real sequence: the server has already applied the correction, and the
+  // editor is still showing the version with the mistake in it.
+  const corrected = '<p>There are three reasons this matters, and the evidence supports them.</p>';
+  await putDraft(corrected);
+  const eAdopt = errors.length;
+  const surface = nodesIn(appNode()).find((n) => hasClass(n, 'editor-surface'));
+  check('the editor surface is findable', !!surface);
+  run(`pageDraft.adopt(${JSON.stringify(corrected)});`);
+  check('the corrected text replaces what is on screen',
+    /There are three reasons/.test(surface.innerHTML || ''), (surface.innerHTML || '').slice(0, 80));
+  check('the editor is not left looking unsaved', run('pageDraft.isDirty()') === false,
+    'adopt must mark the new text as already saved, or the old copy gets pushed back');
+
+  // Now type after the correction. This is where a broken adopt loses it: the
+  // editor would still be holding the uncorrected text and would save that plus
+  // the new sentence, wiping the fix.
+  surface.innerHTML = surface.innerHTML + '<p>And one more line.</p>';
+  await run('pageDraft.flush()');
+  await settle(400);
+  const stored = await (await fetch(BASE + '/api/assignments/' + textA.id)).json();
+  check('typing after a correction keeps the correction',
+    /There are three reasons/.test(stored.draft_html || ''), stored.draft_html);
+  check('and keeps what was typed', /And one more line/.test(stored.draft_html || ''), stored.draft_html);
+  check('adopting threw nothing', errors.length === eAdopt, errors.slice(eAdopt).join(' | '));
+  // Put the page back the way the rest of the sweep expects to find it.
+  await putDraft(draftBeforeAdopt);
+
+  // Leaving the page must release the lane too, or every other view renders
+  // with a gap down the right-hand side.
+  run('state.chatOpen = true;');
+  await renderView('work', `state.workId = ${textA.id};`);
+  await settle(300);
+  check('re-opening reserves the lane again', document.body._classes().includes('chat-open'));
+  await renderView('today');
+  check('navigating away releases the lane', !document.body._classes().includes('chat-open'));
+  run('state.chatOpen = false;');
+
   section('Work page (guide assignment)');
   await renderView('work', `state.workId = ${guideA.id};`);
   root = appNode();
   check('guide page has a steps list', nodesIn(root).some((n) => n.tagName === 'OL'));
-  check('guide page has no editor', inputs(root, 'TEXTAREA').length === 0);
+  // The only textarea on a guide page is the Ask Claude box — there is nothing
+  // to type the work into, which is the whole point of guide mode.
+  check('guide page has no editor to write the work in',
+    inputs(root, 'TEXTAREA').every((n) => hasClass(n, 'chat-input')));
   const mc = nodesIn(root).find((n) => n.tagName === 'BUTTON' && /Mark complete/.test(n.text));
   check('guide page has Mark complete', !!mc);
   const eb3 = errors.length;
@@ -900,8 +1025,11 @@ async function renderView(view, extra = '') {
 
   // ------------------------------------------------ nothing shows a bar
   section('No progress bars, no emoji');
-  for (const view of ['today', 'week', 'projects', 'tests', 'classes', 'email']) {
-    await renderView(view);
+  // The work page is in here because the chat launcher wanted a speech-bubble
+  // emoji and got a drawn one instead — a rule the list views alone would not
+  // have caught.
+  for (const view of ['today', 'week', 'projects', 'tests', 'classes', 'email', 'work']) {
+    await renderView(view, view === 'work' ? `state.workId = ${textA.id};` : '');
     const bars = nodesIn(appNode()).filter((n) => n._classes().includes('bar') || n.htmlClasses.includes('bar'));
     check(`${view} has no progress bar`, bars.length === 0, String(bars.length));
     const text = nodesIn(appNode()).map((n) => n.text).join(' ') + ' ' + (appNode().innerHTML || '');

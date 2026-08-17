@@ -12,6 +12,7 @@ const url = require('url');
 const api = require('./src/api');
 const users = require('./src/users');
 const classNotes = require('./src/classNotes');
+const assignmentChat = require('./src/assignmentChat');
 const { sync } = require('./src/sync');
 const { getDb } = require('./src/db');
 
@@ -168,6 +169,26 @@ async function handleApi(req, res, pathname, query) {
       // happens on its own as part of building the Instructions box.
       if (method === 'POST' && seg[2] === 'read-files') {
         return sendJson(res, 200, { text: await api.ensureAttachmentText(id) });
+      }
+      // Ask Claude about this assignment. Closing the page (or pressing Stop)
+      // closes the request, which kills the hidden claude process — same shape
+      // as the essay coach above.
+      if (seg[2] === 'chat') {
+        if (method === 'GET') return sendJson(res, 200, { messages: assignmentChat.history(id) });
+        if (method === 'POST' && seg[3] === 'clear') return sendJson(res, 200, assignmentChat.clearChat(id));
+        if (method === 'POST' && !seg[3]) {
+          const ac = new AbortController();
+          res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+          let out;
+          try {
+            out = await assignmentChat.sendMessage(id, body.question, { signal: ac.signal });
+          } catch (err) {
+            if (ac.signal.aborted) return; // they left; nobody is listening
+            throw err;
+          }
+          if (ac.signal.aborted || res.writableEnded) return;
+          return sendJson(res, 200, out);
+        }
       }
     }
 

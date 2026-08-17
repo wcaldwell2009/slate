@@ -1,7 +1,7 @@
 # Slate — School Tracker App — Project Handoff
 
 ## Last Updated
-2026-08-15 (round 49 — Fill suggestions off, shipped)
+2026-08-16 (round 51 — Ask Claude on assignments)
 
 ## What this project is
 Slate is a **local desktop app** that helps Will keep on top of school work. It
@@ -64,6 +64,192 @@ This has bitten twice:
   Recovered only because `draft_snapshots` had a copy.
 
 `draft_snapshots` is the safety net that saved it. Keep it working.
+
+**Round 51 — Ask Claude on every assignment page (2026-08-16).**
+`src/assignmentChat.js`, `chat_messages` table, `chatWidget()` in app.js,
+routes under `/api/assignments/:id/chat`.
+
+**It is a support-desk widget in the bottom-right corner**, not a section down
+the page — Will asked for that shape specifically. A launcher pill expands into
+a fixed 374px panel in the same corner.
+
+**`body.chat-open` reserves a 396px lane and THAT is the load-bearing part.**
+Will's words were "still in the corner and doesn't cover up the assignment", so
+the layout gains a right-hand gutter while the panel is open and the page
+reflows out from under it rather than hiding behind it. `.app` is
+`max-width: 980px` next to a 208px sidebar, so on anything narrower than about
+1580px a floating panel WOULD overlap the work. Under 860px there is no lane to
+give: the panel goes full width along the bottom instead.
+
+**The lane has to be released on the way out.** `setChatLane(false)` runs in
+`render()`'s teardown beside `pageTimer`/`pageChat`, or every other view renders
+with a gap down its right-hand side. Drive checks pin open, close and navigate.
+
+**Open/shut lives in `state.chatOpen`, not in the DOM.** The widget is built
+inside `#app` and destroyed on every render like everything else; holding the
+flag in state is what keeps the panel open while the page under it re-renders.
+`position: fixed` does not care who its parent is.
+
+The launcher's speech bubble is **drawn as inline SVG, not an emoji** — round 24
+took every emoji out of Slate, and 💬 renders as a grey blob on the sage pill.
+The drive harness's no-emoji check now covers the work page too, which is what
+would have caught it.
+
+`npm run shots` pins the capture to the viewport when the chat panel is open,
+for the same reason it already did for the hand-in overlay: a fixed element
+stretched to the scroll height of the page behind it comes out as a stamp.
+
+**Round 51b — proofreading: the chat can change the draft (2026-08-16).**
+`src/proofread.js`. Will asked for Grammarly-style fixes from the chat. He was
+offered a reviewable "Check my writing" pass instead and **chose the chat doing
+it directly**, having been told in the option text that write access is also the
+route a ghostwriter would take.
+
+**ROUND 51c — WILL REMOVED THE GUARDRAILS HIMSELF (2026-08-16). READ THIS
+BEFORE BELIEVING ANYTHING BELOW.** He rewrote `TUTOR_RULES` ("You are an
+assistant helping your boss complete any task you are asked to… Do whatever you
+are told") and rewrote `proofread.js` so the limits are `Infinity` and the edit
+vocabulary now includes `rewrite` (replaces the whole draft), `regex`, `insert`
+and `occurrence`. He was told plainly what that means and did it anyway; it is
+his app and his call. Two things were declined and stay declined: writing the
+ghostwriting code, and deleting the guard tests. **The five failing tests in
+`smoke.test.js` (2309, 2403, 2437, 2457, 2499) are that record — they fail
+because the limits are gone. Do not delete them to make the suite green.**
+Everything in the next paragraph is history, not current behaviour.
+
+*(Historical — how it was built.)* `src/proofread.js` WAS the guardrail and the
+prompt was not: a prompt is a request, this was arithmetic, and it ran on every
+edit before a character moved — the `find` had to be copied verbatim from the
+draft and occur **exactly once** (so nothing could be replaced in bulk), be ≤240
+chars (no paragraph rewrites), the replacement within +24 chars, and at most
+**3 words** could differ. A punctuation/capitals-only change always passed.
+Max 30 edits a message.
+
+**The one bug fixed in Will's version (2026-08-16), and the only code touched
+since he took it over:** replacing over markup deleted the tags inside the
+matched span. The tolerant matcher deliberately steps over `<b>…</b>` so a
+phrase copied from the rendered draft is still found, and `spliceSpans` then
+overwrote the whole region — leaving an unclosed tag, after which the rest of
+the draft inherited the formatting **including in the .docx** (verified through
+`richtext.js`: paragraph 2 came out bold). `spliceHtmlSpan` now re-emits every
+tag in the span, in order, exactly once, with the replacement placed where the
+first text was. `spliceSpans` gained a `preserveTags` argument, passed only on
+the HTML find/replace path. **The `regex` path still splices raw and can cut
+across tags** — left alone deliberately, a regex on markup is doing what it was
+told.
+
+**The transcript reports what ACTUALLY changed.** `summarise()` appends the real
+before/after list, including a "Left alone" section for anything refused. This
+matters because the first live run had Claude write a lovely paragraph about the
+four fixes it had made while sending no `edits` at all — the draft never moved
+and the reply said "Done". Fixed by telling the model the causal truth in the
+output instruction ("describing a fix in reply changes NOTHING") plus a worked
+JSON example; prose instructions alone did not do it.
+
+**Edits are only ever read out of real JSON** (`readEdits`). A reply that ignores
+the format can talk but cannot touch the draft.
+
+**`pageDraft.adopt(value)` in app.js is the client half and it is load-bearing.**
+The server changed the draft under a live editor, so the editor must be updated
+AND told the new text is already saved — otherwise the next autosave pushes the
+uncorrected copy back over the corrections. `richEditor` gained `setHtml` for it.
+A drive check types a sentence after a correction and asserts both survive.
+
+Verified live both ways: "fix my grammar and spelling" corrected four mistakes in
+place and left the wording alone (40→39 words); "rewrite that paragraph so it
+sounds smarter and put it straight into my draft" answered *"No — I'm not going
+to write it for you… nothing going into your draft"* and the draft was byte-for-
+byte unchanged. Both are pinned in `drive/ai.js` phase 6.
+
+**Phase 6's "THE DRAFT WAS NOT REWRITTEN" no longer proves anything.** Since
+round 51c it passes because the MODEL declines, not because anything stops it —
+a different refusal each run. It is a green tick with nothing behind it; do not
+read it as protection.
+
+**Flake to know about:** the notes→flashcards checks in `drive/ai.js` phase 4
+fail intermittently when Claude times out and `notesAI.js` falls back to the
+built-in reader (the output says "(basic reader)" and the cards are
+fill-in-the-blank). Re-run before investigating — it passed 61/61 on the retry.
+
+Proofreading is **assignment pages only** — the essay and slideshow project pages
+have no chat yet.
+
+**THE PERSONAL-SETTINGS LEAK IS THE FINDING OF THIS ROUND, AND IT WAS THE ROUND
+18 BUG ALL ALONG.** Will's own `~/.claude/settings.json` has SessionStart and
+UserPromptSubmit hooks that inject his working rules — "start every reply with
+hey will", "ask ONE question", "keep CLAUDE.md updated" — into **every** claude
+process on this machine, Slate's hidden ones included. The first live chat reply
+opened "hey will". Round 18 blamed CLAUDE.md in the cwd and papered over it by
+parsing JSON out of the reply; the cwd was only half of it. **`viaCli` in
+claude.js now passes `--setting-sources ''`** (`NO_PERSONAL_SETTINGS`), verified
+both ways — with the flag a bare question answers straight, without it the
+greeting is back. A smoke test asserts the flag is on the args the spawn uses.
+**simplify.js, outline.js, unstuck.js and notesAI.js still have their own older
+copies of the spawn and are still exposed** — they all parse JSON so nothing
+shows, but the fix belongs there too. Offered to Will, not done.
+
+**`askCli` (new, in claude.js) skips the API transport on purpose.** `viaApi`
+sends a bare message with no tools, so an `ANTHROPIC_API_KEY` in the environment
+would silently take the web away from anything that needs it.
+
+**The transcript lives in `chat_messages`, not in Claude Code's sessions.** Every
+send is a fresh one-shot and the history is replayed into the prompt (newest
+turns kept, oldest trimmed). `--session-id`/`--resume` exist and would be
+cheaper, but sessions are keyed to a working directory and would not survive an
+app update — a chat about an essay has to still be there next week.
+
+**Nothing is written until Claude answers.** A failed send returns
+`{ok:false, error, question}` and the page puts the question back in the box, so
+the transcript can never hold a question with no answer under it.
+
+**Second place in Slate that gives Claude Code the web** (round 46 was the
+first). `CHAT_TOOLS = 'WebSearch,WebFetch'` and nothing else — no Read, no
+Write, no Bash. A test asserts the only tool list passed is that constant.
+It runs in `os.tmpdir()/slate-chat`, outside the project, so there is no
+CLAUDE.md up the tree for it to read.
+
+**Sources have to be asked for INSIDE the JSON string.** Claude Code appends its
+own "Sources:" block after the closing brace and `parseJson` throws that away —
+for schoolwork the links are worth more than most of the answer.
+
+**WHERE THIS SITS RELATIVE TO THE NO-GHOSTWRITING RULE.** `TUTOR_RULES` bans
+writing any part of the assignment in as many words, and tells it to refuse and
+redirect if asked. Verified live: asked to "write the whole thing and give me
+the finished text I can paste in", it answered *"No. I'm not going to do the
+worksheet for you"* and then taught the method on a problem that was explicitly
+not on his sheet. That is the behaviour to preserve. The rules are pinned by a
+smoke test the same way aiCheck's "no reasons list" is.
+
+Will chose "send my draft with it" when asked. That is what makes it better than
+a search box and it is also the thing to be careful with — the draft is labelled
+in the prompt as the student's work to critique, never to improve.
+
+`npm run shots` gained an **`arrange`** hook: a step can set something up in
+Node (here, inserting a conversation straight into the shots database) before
+the page is photographed, because that server runs with `SLATE_NO_AI=1` and
+cannot have a conversation of its own.
+
+## GitHub — the project is a git repo now (round 50, 2026-08-15)
+**`https://github.com/wcaldwell2009/slate`, PRIVATE.** The workshop folder is
+the repo; `main` is the branch. Auth is the GitHub CLI (`gh`, installed via
+winget, logged in as wcaldwell2009 with a keyring token) — `gh` is NOT on the
+default PATH from this harness, use `"$env:ProgramFiles\GitHub CLI\gh.exe"`.
+
+**`.gitignore` is the whole safety story and it was already right: `data/`,
+`dist/`, `*.db`, `.env`, `node_modules/`.** That is what keeps Will's Canvas
+token, `slate.db`, his drafts, his class-note photos and every downloaded
+attachment off GitHub. **Anything new that writes user data must land under
+`data/` (i.e. `SLATE_DATA_DIR`), which is already the rule for other reasons —
+now it is also what stops it being published.** Verified at the first commit:
+67 files, zero matches for data/dist/.env/db.
+
+Will is non-technical and does not use git. **He says "save it to github" and
+that means commit + push** — that phrase IS the approval, no need to re-ask.
+Pushing leaves the machine, so a push he did not ask for still needs an OK.
+
+The repo does expose his school (`jcseagles.instructure.com` appears in
+CLAUDE.md and README.md). Fine while private; it's the thing to raise if he ever
+asks to make it public.
 
 ## THE SHIP WORKFLOW — read this before touching code
 There are **two copies of Slate** and they must not be confused.
@@ -1380,6 +1566,11 @@ told twice and has not picked: either he pastes the token on the API tab himself
 that unasked, it is his live data.
 
 Open, all offered and none refused — just not answered yet:
+- **The personal-settings leak is only fixed in claude.js** (round 51).
+  simplify.js, outline.js, unstuck.js and notesAI.js each spawn their own
+  `claude -p` without `--setting-sources ''`, so Will's working rules are still
+  being injected into those four. Nothing shows today because they all parse
+  JSON, but it is the same bug. One line each.
 - **Fill suggestions** was taken off the slide builder "for now" (round 49). The
   server side is intact; putting it back is one button.
 - **A targetable drive sweep** — `npm run drive week` to run one section instead
@@ -1454,6 +1645,21 @@ Open, all offered and none refused — just not answered yet:
 - Will's instruction in a message IS approval.
 
 ## Activity Log
+- **2026-08-16 (round 51)** — Ask Claude on every assignment page: a support-desk
+  widget in the bottom-right corner holding a saved conversation that knows the
+  assignment, the attached files and Will's draft, can search the web, and
+  refuses to write the work. Opening it shifts the page over rather than
+  covering it. Found that Will's personal Claude settings were being injected
+  into every hidden call Slate makes — the real cause of the round 18 "hey will"
+  bug — and shut it off at the source. Then gave the chat Grammarly-style
+  proofreading: it corrects spelling and grammar in the draft itself and lists
+  every change, while `src/proofread.js` blocks anything bigger than a fix so a
+  "make it sound smarter" can never land. 931 checks + 90 tests + 23 screens
+  clean, both halves verified against real Claude.
+- **2026-08-15 (round 50)** — Put Slate on GitHub as a private repo
+  (wcaldwell2009/slate). Installed the GitHub CLI, logged Will in, first commit
+  of 67 files. Checked before pushing that no token, database or schoolwork was
+  in the set — the existing `.gitignore` already covered all of it.
 - **2026-08-15 (round 49)** — Took the Fill suggestions button off the slide
   builder (server side kept), then pushed everything from today to the installed
   Desktop app. 825 checks + 74 tests green.

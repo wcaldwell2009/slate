@@ -137,6 +137,21 @@ function migrate(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_time_log_day ON time_log(day);
 
+    -- "Ask Claude" on an assignment page. The whole conversation lives HERE,
+    -- in Slate's own database, not in Claude Code's session files: every send
+    -- is a fresh one-shot claude -p and the history is replayed into the
+    -- prompt. That way a chat survives a restart, an app update and a change of
+    -- working directory, none of which Claude Code's own sessions would.
+    -- (No backticks in here — this whole schema is one JS template literal.)
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+      role          TEXT NOT NULL,   -- 'you' | 'claude'
+      text          TEXT NOT NULL,
+      created_at    TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_assignment ON chat_messages(assignment_id, id);
+
     -- A photo of handwritten or typed notes, typed up by Claude. Belongs to a
     -- class; can be attached to any number of that class's tests.
     CREATE TABLE IF NOT EXISTS class_notes (

@@ -131,12 +131,15 @@ class Devtools {
   }
 
   async shot(file) {
-    // Long pages get photographed in full. A POPUP does not: the overlay is
-    // fixed to the viewport, so stretching the shot to the scroll height of the
-    // page behind it shrinks the thing being looked at down to a stamp.
+    // Long pages get photographed in full. Anything FIXED TO THE VIEWPORT does
+    // not: stretching the shot to the scroll height of the page behind it
+    // shrinks the thing being looked at down to a stamp, and a fixed element
+    // only paints once anyway. That is the hand-in overlay and the corner chat
+    // panel — both pin the shot to the viewport instead.
     const popupOpen = await this.eval(
       "const o=document.getElementById('overlay');"
-      + "return !!(o && !o.classList.contains('hidden'));"
+      + "const c=document.querySelector('.chat-panel:not(.hidden)');"
+      + "return !!c || !!(o && !o.classList.contains('hidden'));"
     ).catch(() => false);
     if (popupOpen) {
       const r0 = await this.send('Page.captureScreenshot', {
@@ -197,6 +200,61 @@ const STEPS = [
       + "const w=ds.find(d=>d.work_mode==='text')||ds[0];"
       + "state.view='work'; state.workId=w.id; await render();"
       + "await new Promise(r=>setTimeout(r,1800));", // let the page meter answer
+  },
+  {
+    // The Ask Claude panel with a real conversation in it. The messages are put
+    // straight into the database because this server has AI switched off; the
+    // page then renders them through its own normal path.
+    name: 'assignment-chat',
+    arrange: (dbPath) => {
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync(dbPath);
+      const row = db.prepare("SELECT id FROM assignments WHERE work_mode='text' ORDER BY id LIMIT 1").get();
+      if (!row) { db.close(); return; }
+      db.prepare('DELETE FROM chat_messages WHERE assignment_id = ?').run(row.id);
+      const add = (role, text) => db
+        .prepare('INSERT INTO chat_messages (assignment_id, role, text, created_at) VALUES (?,?,?,?)')
+        .run(row.id, role, text, new Date().toISOString());
+      add('you', 'I do not really get what this is asking. Where do I even start?');
+      add('claude', "Start with what it wants at the end: one worked answer per question, with the steps shown.\n\n"
+        + 'The part people trip on is the second half, where you have to justify the method rather than just use it. '
+        + 'Do the first question the way you normally would, then write one sentence saying why that method was the right one. '
+        + 'If that sentence is hard to write, that is the bit to ask me about.\n\n'
+        + 'Which question is giving you the most trouble?');
+      add('you', 'the second one. can you fix my grammar first?');
+      // A proofread turn, so the change log Slate appends gets photographed too.
+      add('claude', 'Fixed three things, all mechanical. I left the wording alone — that is yours.\n\n'
+        + 'Changed in your draft (3):\n'
+        + '• "Their are three" → "There are three" — wrong word\n'
+        + '• "the evidence show" → "the evidence shows" — subject-verb agreement\n'
+        + '• "prove the the point" → "prove the point" — doubled word\n\n'
+        + 'Now the reasoning. It holds up as far as it goes, but it stops one step short — you say the method '
+        + 'works and never say why it beats the alternative, which is the thing being marked. '
+        + 'What would you say the alternative gets wrong?');
+      db.close();
+    },
+    setup: "state.chatOpen=false;"
+      + "const t=await get('/api/today');"
+      + "const ds=await Promise.all(t.assignments.map(a=>get('/api/assignments/'+a.id)));"
+      + "const w=ds.find(d=>d.work_mode==='text')||ds[0];"
+      + "state.view='work'; state.workId=w.id; await render();"
+      + "await new Promise(r=>setTimeout(r,1500));"
+      // Opened by clicking the launcher, not by setting the flag — the picture
+      // should be of the thing the student actually does.
+      + "const l=document.querySelector('.chat-launcher'); if(l) l.click();"
+      + "await new Promise(r=>setTimeout(r,500));"
+      + "const b=document.querySelector('.chat-input'); if(b) b.value='is that the same as what we did in class?';",
+  },
+  {
+    // The corner launcher, shut, over a page of work — what it looks like when
+    // the student is not using it.
+    name: 'assignment-chat-closed',
+    setup: "state.chatOpen=false;"
+      + "const t=await get('/api/today');"
+      + "const ds=await Promise.all(t.assignments.map(a=>get('/api/assignments/'+a.id)));"
+      + "const w=ds.find(d=>d.work_mode==='text')||ds[0];"
+      + "state.view='work'; state.workId=w.id; await render();"
+      + "await new Promise(r=>setTimeout(r,1500));",
   },
   {
     name: 'assignment-with-files',
@@ -343,6 +401,10 @@ const STEPS = [
   for (const step of steps) {
     const before = problems.length;
     try {
+      // A step can arrange something the app itself cannot produce here — the
+      // shots server runs with SLATE_NO_AI=1, so a conversation has to be put
+      // into the database rather than had. Runs in Node, not the page.
+      if (step.arrange) await step.arrange(path.join(tmp, 'shots.db'), base);
       await dt.eval(step.setup);
       await wait(700);
       const file = path.join(OUT, step.name + '.png');

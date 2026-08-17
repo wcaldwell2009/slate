@@ -49,10 +49,23 @@ async function viaApi(content, { maxTokens = 4000, signal } = {}) {
 // ---- transport: the hidden CLI --------------------------------------------
 // windowsHide means no console window ever appears — the installed Slate runs
 // with no terminal of its own, so a visible one would be a bug.
+//
+// --setting-sources "" IS LOAD-BEARING, and it is the root cause of the round 18
+// bug rather than the symptom. Claude Code normally loads the machine's own
+// settings, and Will's ~/.claude/settings.json carries SessionStart and
+// UserPromptSubmit hooks that inject his personal working rules — "start every
+// reply with hey will", "ask ONE question", "keep CLAUDE.md updated" — into
+// EVERY claude invocation on this computer, including this one. Slate's calls
+// are not Will talking to his assistant; they are the app asking a question on
+// a student's behalf, and none of that belongs in the answer. Round 18 papered
+// over it by parsing JSON out of the reply; this actually stops it.
+// Verified: without the flag a plain question comes back starting "hey will".
+const NO_PERSONAL_SETTINGS = ['--setting-sources', ''];
+
 function viaCli(prompt, { cwd, timeoutMs = 120000, allowedTools, signal } = {}) {
   return new Promise((resolve, reject) => {
     const isWin = process.platform === 'win32';
-    const base = ['-p', '--output-format', 'text'];
+    const base = ['-p', '--output-format', 'text', ...NO_PERSONAL_SETTINGS];
     if (allowedTools) base.push('--allowedTools', allowedTools);
     const cmd = isWin ? 'cmd' : 'claude';
     const args = isWin ? ['/c', 'claude', ...base] : base;
@@ -93,6 +106,15 @@ async function ask(prompt, opts = {}) {
   try { return await viaCli(prompt, opts); }
   catch (e) { problems.push('cli: ' + e.message); }
   throw new Error(problems.join(' | ') || 'no way to reach Claude');
+}
+
+// Same thing, but never the API. Anything that needs WebSearch/WebFetch has to
+// come this way: the API transport above sends a bare message with no tools, so
+// an ANTHROPIC_API_KEY sitting in the environment would silently take away the
+// web access the caller asked for.
+async function askCli(prompt, opts = {}) {
+  if (aiDisabled()) throw new Error('AI is switched off (SLATE_NO_AI=1)');
+  return viaCli(prompt, opts);
 }
 
 const IMAGE_TYPES = {
@@ -208,4 +230,4 @@ function queued(job) {
   return run;
 }
 
-module.exports = { ask, askAboutImage, askAboutFile, parseJson, queued, imageMediaType, aiDisabled };
+module.exports = { ask, askCli, askAboutImage, askAboutFile, parseJson, queued, imageMediaType, aiDisabled };

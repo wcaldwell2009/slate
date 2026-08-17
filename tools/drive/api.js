@@ -695,6 +695,44 @@ const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
       (await post(`/api/assignments/${noFiles}/read-files`, {})).body.text === '');
   }
 
+  // This phase runs with SLATE_NO_AI=1, so the point here is the plumbing and
+  // the failure path — that a send Claude cannot answer leaves the transcript
+  // untouched instead of stranding a question in it. The real conversation is
+  // exercised in the live phase (drive:all).
+  section('Ask Claude');
+  const chatOn = (await get('/api/today')).body.assignments[0];
+  const chat0 = await get(`/api/assignments/${chatOn.id}/chat`);
+  check('an assignment starts with an empty chat',
+    chat0.status === 200 && Array.isArray(chat0.body.messages) && chat0.body.messages.length === 0, chat0.body);
+  const chatOff = await post(`/api/assignments/${chatOn.id}/chat`, { question: 'what is this asking?' });
+  check('with Claude switched off the send fails politely',
+    chatOff.status === 200 && chatOff.body.ok === false, chatOff.body);
+  check('and says why in plain words', /switched off/i.test(chatOff.body.error || ''), chatOff.body.error);
+  check('and hands the question back so the box can be refilled',
+    chatOff.body.question === 'what is this asking?', chatOff.body);
+  check('a failed send writes NOTHING to the transcript',
+    (await get(`/api/assignments/${chatOn.id}/chat`)).body.messages.length === 0);
+  check('an empty question is refused',
+    (await post(`/api/assignments/${chatOn.id}/chat`, { question: '   ' })).body.ok === false);
+  check('a missing question is refused',
+    (await post(`/api/assignments/${chatOn.id}/chat`, {})).body.ok === false);
+  check('a chat on an assignment that does not exist fails cleanly',
+    (await post('/api/assignments/987654/chat', { question: 'hi' })).body.ok === false);
+  const chatCleared = await post(`/api/assignments/${chatOn.id}/chat/clear`, {});
+  check('clearing an empty chat is a harmless no-op',
+    chatCleared.body.ok === true && chatCleared.body.messages.length === 0, chatCleared.body);
+  // Every work page gets one, guide-mode included — a guide assignment is
+  // exactly the kind you want to ask questions about.
+  const guideForChat = [];
+  for (const a of (await get('/api/today')).body.assignments) {
+    const d = (await get('/api/assignments/' + a.id)).body;
+    if (d.work_mode !== 'text') guideForChat.push(d);
+  }
+  if (guideForChat.length) {
+    check('a guide-mode assignment has a chat too',
+      (await get(`/api/assignments/${guideForChat[0].id}/chat`)).status === 200);
+  }
+
   section('Exams are not projects');
   const projectTitles = (await get('/api/projects')).body.map((p) => p.title);
   // "(Final)" on an essay means the final draft, not a final exam — a project
