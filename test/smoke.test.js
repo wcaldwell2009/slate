@@ -2301,6 +2301,175 @@ test('Canvas saying it is turned in counts as done', () => {
   assert.equal(r.notSubmitted.completed_day, null);
 });
 
+
+
+// ---- sources, and a receipt short enough to read -------------------------
+test('the receipt collapses whole-box changes instead of listing each one', () => {
+  const { summarise } = require('../src/proofread');
+  const box = (b) => ({ kind: 'rewrite', box: b, replace: 'x'.repeat(200), why: '' });
+  // Four slides used to print four bullet lines. Will asked for "added bullet
+  // points for slides 2-4" instead, and a run of numbers is what reads.
+  const note = summarise([box('slide2.bullets'), box('slide3.bullets'), box('slide4.bullets')], []);
+  assert.equal(note, 'Updated bullets on slides 2-4.');
+  assert.ok(!note.includes('•'), 'no per-change list for whole-box edits');
+
+  const mixed = summarise([box('slide1.notes'), box('slide2.notes'), box('slide5.title')], []);
+  assert.match(mixed, /notes on slides 1 and 2/);
+  assert.match(mixed, /title on slide 5/);
+
+  // Word-level fixes keep their before/after — that IS the information.
+  const words = summarise([{ kind: 'replace', find: 'teh', replace: 'the', why: 'spelling', count: 1, total: 1 }], []);
+  assert.match(words, /"teh" → "the"/);
+
+  // A refusal is still spelled out whatever else happened.
+  const refused = summarise([box('slide7.notes')], [{ find: 'x', reason: 'could not find that text in the draft' }]);
+  assert.match(refused, /Left alone/);
+});
+
+test('sources come back as data, and only real links survive', () => {
+  const { readAnswer } = require('../src/assignmentChat');
+  const allowed = new Set(['slide2.bullets', 'slide2.notes']);
+  const a = readAnswer(JSON.stringify({
+    reply: 'Added bullets to slide 2.',
+    edits: [],
+    sources: [
+      { title: 'Senate', url: 'https://senate.gov/x', where: 'slide2.bullets', quote: 'Big states' },
+      { title: 'nasty', url: 'javascript:alert(1)', where: 'slide2.bullets' },
+      { title: 'local', url: 'file:///c:/secrets.txt' },
+      { title: 'real but unknown box', url: 'https://example.com', where: 'slide99.title' },
+    ],
+  }), { allowed });
+
+  // The list is rendered as clickable links, so anything that is not http(s)
+  // is a way to get something nasty onto the page from a model reply.
+  assert.equal(a.sources.length, 2, 'javascript: and file: urls must be dropped');
+  assert.equal(a.sources[0].where, 'slide2.bullets');
+  // A box that is not on this page would highlight nothing, so the link stays
+  // but loses its anchor rather than looking broken.
+  assert.equal(a.sources[1].where, '');
+});
+
+test('a Sources block written into the reply is stripped, not shown twice', () => {
+  const { readAnswer } = require('../src/assignmentChat');
+  const a = readAnswer(JSON.stringify({
+    reply: 'Added bullets to slide 2.\n\nSources:\n- https://senate.gov/x',
+    sources: [{ title: 'Senate', url: 'https://senate.gov/x' }],
+  }));
+  assert.equal(a.reply, 'Added bullets to slide 2.');
+
+  // A reply that merely uses the word is left alone.
+  const b = readAnswer(JSON.stringify({ reply: 'Check your sources:\nthe textbook is fine.' }));
+  assert.match(b.reply, /textbook is fine/);
+});
+
+test('the prompt says the assignment came from Canvas', () => {
+  const { buildPrompt } = require('../src/assignmentChat');
+  // Without this the model answered "I cannot open Canvas myself" to a question
+  // about the Canvas assignment it was holding.
+  const p = buildPrompt({ title: 'Essay', raw_description: 'Write it.' }, [], 'what does canvas say');
+  assert.match(p, /IS the Canvas assignment/);
+  assert.match(p, /Never claim you cannot see Canvas/);
+});
+
+test('speaker notes never belong in a bullets box', () => {
+  const { buildPrompt } = require('../src/assignmentChat');
+  const row = {
+    build_mode: 'slides',
+    slides_json: JSON.stringify([{ title: 'A', bullets: ['x'] }, { title: 'B', bullets: ['y'] }]),
+  };
+  const p = buildPrompt(row, [], 'add notes for each bullet point');
+  // "notes for each bullet" is the phrasing that put prose into the bullets.
+  assert.match(p, /NEVER PUT THEM IN \.bullets/);
+  assert.match(p, /still means slideN\.notes/);
+});
+// ---- speaker notes -------------------------------------------------------
+// Notes live in their own parts in a .pptx, and getting the package wrong is
+// silent until PowerPoint refuses the whole file. These pin the four pieces.
+function pptxPartNames(buf) {
+  const out = [];
+  let i = 0;
+  while (i < buf.length - 4) {
+    if (buf.readUInt32LE(i) === 0x04034b50) {
+      const nlen = buf.readUInt16LE(i + 26);
+      const elen = buf.readUInt16LE(i + 28);
+      out.push(buf.toString('utf8', i + 30, i + 30 + nlen));
+      i = i + 30 + nlen + elen + buf.readUInt32LE(i + 18);
+    } else i++;
+  }
+  return out;
+}
+
+test('speaker notes reach the PowerPoint as real notes parts', () => {
+  const og = require('../src/officegen');
+  const buf = og.buildPptx([
+    { title: 'Deck', bullets: ['Class'], notes: 'Open with a question.' },
+    { title: 'Second', bullets: ['a', 'b'] },
+    { title: 'Third', bullets: ['c'], notes: 'Two lines.\nSecond line.' },
+  ], {});
+  const names = pptxPartNames(buf);
+
+  // One notes part per slide that HAS notes — slide 2 has none and must not
+  // get an empty one, or PowerPoint shows a deck where every slide has notes.
+  assert.ok(names.includes('ppt/notesSlides/notesSlide1.xml'));
+  assert.ok(!names.includes('ppt/notesSlides/notesSlide2.xml'), 'slide 2 has no notes');
+  assert.ok(names.includes('ppt/notesSlides/notesSlide3.xml'));
+  assert.ok(names.includes('ppt/notesMasters/notesMaster1.xml'));
+
+  // THE NOTES MASTER MUST HAVE ITS OWN THEME PART. Pointing it at theme1,
+  // which the slide master already owns, made PowerPoint call the entire file
+  // corrupt and refuse to open it. Found with COM; there is no way to see it
+  // from the XML alone.
+  assert.ok(names.includes('ppt/theme/theme2.xml'), 'notes master needs its own theme');
+  const nmRels = unzipEntry(buf, 'ppt/notesMasters/_rels/notesMaster1.xml.rels');
+  assert.match(nmRels, /theme2\.xml/);
+
+  // Declared, and related both ways.
+  const ct = unzipEntry(buf, '[Content_Types].xml');
+  assert.ok(ct.includes('/ppt/notesSlides/notesSlide1.xml'));
+  assert.ok(ct.includes('/ppt/notesMasters/notesMaster1.xml'));
+  assert.ok(ct.includes('/ppt/theme/theme2.xml'));
+  assert.match(unzipEntry(buf, 'ppt/slides/_rels/slide1.xml.rels'), /notesSlide1\.xml/);
+  const nsRels = unzipEntry(buf, 'ppt/notesSlides/_rels/notesSlide1.xml.rels');
+  assert.match(nsRels, /slides\/slide1\.xml/);
+  assert.match(nsRels, /notesMaster1\.xml/);
+
+  // p:presentation is a SEQUENCE: notesMasterIdLst goes after sldMasterIdLst
+  // and before sldIdLst. Anywhere else is a schema violation and a repair prompt.
+  const pres = unzipEntry(buf, 'ppt/presentation.xml');
+  assert.ok(pres.indexOf('<p:sldMasterIdLst>') < pres.indexOf('<p:notesMasterIdLst>'));
+  assert.ok(pres.indexOf('<p:notesMasterIdLst>') < pres.indexOf('<p:sldIdLst>'));
+
+  const xml = unzipEntry(buf, 'ppt/notesSlides/notesSlide3.xml');
+  assert.match(xml, /Two lines\./);
+  assert.match(xml, /Second line\./, 'each line is its own paragraph');
+});
+
+test('a deck with no notes builds no notes machinery at all', () => {
+  const og = require('../src/officegen');
+  const buf = og.buildPptx([{ title: 'A', bullets: ['x'] }, { title: 'B', bullets: ['y'] }], {});
+  const names = pptxPartNames(buf);
+  assert.ok(!names.some((x) => x.includes('notesSlide')));
+  assert.ok(!names.some((x) => x.includes('notesMaster')));
+  assert.ok(!names.includes('ppt/theme/theme2.xml'));
+  assert.ok(!/notesMasterIdLst/.test(unzipEntry(buf, 'ppt/presentation.xml')));
+  // Whitespace is not notes.
+  const blank = og.buildPptx([{ title: 'A', bullets: ['x'], notes: '   \n ' }], {});
+  assert.ok(!pptxPartNames(blank).some((x) => x.includes('notesSlide')));
+});
+
+test('notes survive a save, and are a box the chat can name', () => {
+  const chat = require('../src/assignmentChat');
+  const slides = [
+    { title: 'One', bullets: ['a'], notes: 'first note' },
+    { title: 'Two', bullets: ['b'], notes: '' },
+  ];
+  const row = { build_mode: 'slides', slides_json: JSON.stringify(slides), title: 'Deck' };
+  const p = chat.buildPrompt(row, [], 'hi');
+  assert.match(p, /slide1\.notes/);
+  assert.match(p, /slide2\.notes/);
+  assert.match(p, /do NOT appear on the slide/i, 'the prompt has to say what notes are');
+  assert.match(p, /first note/, 'existing notes are sent so an edit can find them');
+});
 // ---- Ask Claude ----------------------------------------------------------
 // The chat is the one place in Slate where the student types freely at a model
 // that knows their assignment AND their draft. What keeps it on the right side

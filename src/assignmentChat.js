@@ -51,7 +51,72 @@ const MAX_CONTEXT_CHARS = 4000; // instructions + attachment text
 
 // Boxes an edit is allowed to name. Add a key here and a case in loadBox /
 // persistBox to make another field editable.
-const EDIT_TARGETS = new Set(['draft']);
+// Boxes an edit may name. A page with one writing box has just "draft"; a
+// slideshow has a pair per slide, so Claude can be told to change slide 4's
+// bullets and touch nothing else. Built per row by boxesFor().
+const DRAFT_BOX = 'draft';
+const NEWLINE = String.fromCharCode(10);
+const SLIDE_BOX = /^slide\s*(\d+)\s*[.\s]\s*(title|bullets|notes)$/i;
+
+// A slideshow's boxes are named the way the student sees the deck: slide 1 is
+// the title slide, exactly as it is numbered in the builder. Getting this off
+// by one would send every edit to the wrong slide, so it is 1-based here and
+// converted once, in slideBoxRef.
+function slideBoxRef(target) {
+  const m = SLIDE_BOX.exec(String(target || '').trim());
+  if (!m) return null;
+  const index = Number(m[1]) - 1;
+  if (!Number.isInteger(index) || index < 0) return null;
+  return { index, field: m[2].toLowerCase() };
+}
+
+function isSlideshow(row) {
+  return String(row && row.build_mode) === 'slides';
+}
+
+function slidesOf(row) {
+  try {
+    const parsed = JSON.parse(row.slides_json || 'null');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+// Every box name this row actually has, in the order they appear on the page.
+function boxesFor(row) {
+  if (!isSlideshow(row)) return [DRAFT_BOX];
+  const slides = slidesOf(row);
+  const names = [];
+  slides.forEach((_, i) => {
+    names.push(`slide${i + 1}.title`, `slide${i + 1}.bullets`, `slide${i + 1}.notes`);
+  });
+  return names;
+}
+
+// Bullets are an array in the database and a block of lines to Claude — one
+// bullet per line, which is how they read on the slide and how a person would
+// type them. The split is the inverse of the join, blank lines dropped.
+function bulletsToText(bullets) {
+  return (Array.isArray(bullets) ? bullets : []).map((b) => String(b)).join('\n');
+}
+function textToBullets(text) {
+  return String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
+}
+
+// The current contents of a box, in the shape applyEdits wants. Slides are
+// plain text and carry no markup, so html is null and the tolerant matcher has
+// nothing to step over.
+function loadBox(row, target) {
+  if (target === DRAFT_BOX) {
+    return { html: row.draft_html == null ? null : String(row.draft_html), text: String(row.draft_text || '') };
+  }
+  const ref = slideBoxRef(target);
+  if (!ref) return null;
+  const slide = slidesOf(row)[ref.index];
+  if (!slide) return null;
+  if (ref.field === 'title') return { html: null, text: String(slide.title || '') };
+  if (ref.field === 'notes') return { html: null, text: String(slide.notes || '') };
+  return { html: null, text: bulletsToText(slide.bullets) };
+}
 
 // Invisible sentinel. Everything after it in a stored message is the receipt —
 // shown to the student, but NOT replayed to Claude as conversation. Receipts are
@@ -156,13 +221,29 @@ function workspace() {
 function history(assignmentId) {
   const db = getDb();
   return db
-    .prepare('SELECT id, role, text, created_at FROM chat_messages WHERE assignment_id = ? ORDER BY id')
-    .all(Number(assignmentId));
+    .prepare('SELECT id, role, text, sources, created_at FROM chat_messages WHERE assignment_id = ? ORDER BY id')
+    .all(Number(assignmentId))
+    .map((m) => ({ ...m, sources: parseSources(m.sources) }));
 }
 
-function addMessage(db, assignmentId, role, text) {
-  db.prepare('INSERT INTO chat_messages (assignment_id, role, text, created_at) VALUES (?, ?, ?, ?)')
-    .run(Number(assignmentId), role, String(text), now());
+// Stored as JSON text; handed to the page as an array. A row written before
+// this column existed, or one holding junk, reads as no sources rather than
+// breaking the whole conversation.
+function parseSources(raw) {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+}
+
+function addMessage(db, assignmentId, role, text, sources) {
+  db.prepare('INSERT INTO chat_messages (assignment_id, role, text, sources, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(
+      Number(assignmentId), role, String(text),
+      sources && sources.length ? JSON.stringify(sources) : null,
+      now()
+    );
 }
 
 function clearChat(assignmentId) {
@@ -242,6 +323,13 @@ function fence(label, body) {
 // What Claude is told about the assignment itself.
 function assignmentContext(row) {
   const bits = [];
+  // Labelled as Canvas, because it IS Canvas — refreshFromCanvas pulled it at
+  // the start of this conversation. Without saying so the model answered
+  // "I can't open Canvas myself" to a question about the Canvas assignment,
+  // which is true of its tools and false of what it is holding.
+  bits.push('This block IS the Canvas assignment, pulled from Canvas when this chat started.');
+  bits.push('It is the live copy, attachments included. Answer from it directly.');
+  bits.push('');
   bits.push(`Assignment: ${row.title || 'Untitled'}`);
   if (row.class_name) bits.push(`Class: ${row.class_name}`);
   if (row.due_date) bits.push(`Due: ${row.due_date}`);
@@ -304,19 +392,74 @@ function transcript(messages) {
   return kept.join('\n\n');
 }
 
+
+// What a slideshow page looks like from the chat: one box per editable field,
+// named exactly as an edit must name it. The current contents go in too, so a
+// find/replace has real text to copy out of rather than a guess.
+//
+// Slide 1 is the TITLE SLIDE. Saying so matters — a model told to "add a slide
+// about causes" would otherwise happily overwrite the deck's title.
+function slideContext(row) {
+  const slides = slidesOf(row);
+  if (!slides.length) return 'This slideshow has no slides yet.';
+  const lines = [
+    'This is a SLIDESHOW. There is no single writing box — each slide has three:',
+    '  slideN.title   — the header line of slide N',
+    '  slideN.bullets — the body of slide N, ONE BULLET PER LINE',
+    '  slideN.notes   — the speaker notes for slide N. These do NOT appear on the slide.',
+    '                   They are what the student reads from while presenting, and they',
+    '                   come out in the notes pane of the PowerPoint. Plain sentences,',
+    '                   not bullets.',
+    'Slide 1 is the title slide: its "bullets" box holds the subtitle line.',
+    'Slide numbers are the ones shown below. Edit only the boxes you were told to.',
+    '',
+  ];
+  slides.forEach((slide, i) => {
+    const num = i + 1;
+    lines.push(fence(
+      'SLIDE ' + num,
+      'slide' + num + '.title: ' + String(slide.title || '')
+      + NEWLINE + 'slide' + num + '.bullets:' + NEWLINE
+      + (bulletsToText(slide.bullets) || '(empty)')
+      + NEWLINE + 'slide' + num + '.notes:' + NEWLINE
+      + (String(slide.notes || '').trim() || '(empty)')
+    ));
+  });
+  return lines.join('\n');
+}
 function buildPrompt(row, messages, question) {
   const past = transcript(messages);
+  const slideshow = isSlideshow(row);
+  const box = slideshow ? 'slide3.bullets' : 'draft';
+  const boxHint = slideshow ? 'slide2.bullets, slide2.notes, …' : 'draft';
   const editShapes = [
     '"edits" is a list. Leave it EMPTY unless you were explicitly told to change the writing.',
     'Each entry is one of these shapes, and "target" is the name of the box:',
-    '  {"target": "draft", "find": "exact text from the draft", "replace": "new text", "why": "short reason"}',
-    '  {"target": "draft", "insert": "new text", "after": "exact text from the draft", "why": "..."}',
-    '  {"target": "draft", "insert": "new text", "before": "exact text from the draft", "why": "..."}',
-    '  {"target": "draft", "insert": "new text", "at": "end", "why": "..."}   ("start" also works)',
-    '  {"target": "draft", "rewrite": "the entire new text", "why": "..."}',
+    '  {"target": "' + box + '", "find": "exact text from that box", "replace": "new text", "why": "short reason"}',
+    '  {"target": "' + box + '", "insert": "new text", "after": "exact text from that box", "why": "..."}',
+    '  {"target": "' + box + '", "insert": "new text", "before": "exact text from that box", "why": "..."}',
+    '  {"target": "' + box + '", "insert": "new text", "at": "end", "why": "..."}   ("start" also works)',
+    '  {"target": "' + box + '", "rewrite": "the entire new contents of that box", "why": "..."}',
     'On a find/replace, "occurrence" chooses which match: it defaults to the first one, and',
     'accepts "all", "last", or a number counting from 1. Anything else is refused.',
+    'ALWAYS set "target". One edit changes one box; use several entries to change several.',
   ];
+  if (slideshow) {
+    editShapes.push(
+      'The boxes on this page are: ' + boxesFor(row).join(', ') + '.',
+      'To change several slides at once, send one edit per box. Do not put more than one',
+      'slide into a single edit — the text would all land on whichever slide you named.',
+      'In a bullets box, one line is one bullet. To indent a sub-point, start the line with',
+      'two spaces and a dash. Do not number bullets by hand; the slide does that.',
+      'A notes box is prose, not bullets — write what the student would SAY out loud for',
+      'that slide. Only touch a notes box if you were asked about notes.',
+      'SPEAKER NOTES GO IN A .notes BOX. NEVER PUT THEM IN .bullets. If you are writing',
+      'sentences for the student to say, that is a notes box, whatever words they used to',
+      'ask for it — "notes for each bullet" still means slideN.notes, not extra bullets.',
+      'A bullet is a short fragment that goes ON the screen. If what you wrote is longer',
+      'than about ten words, it is notes and it is in the wrong box.'
+    );
+  }
   if (draftWasTrimmed(row)) {
     editShapes.push('Do NOT use the "rewrite" shape this turn — you have only been shown part of the draft.');
   }
@@ -326,8 +469,8 @@ function buildPrompt(row, messages, question) {
     '--- THE ASSIGNMENT ---',
     assignmentContext(row),
     '',
-    '--- THEIR DRAFT ---',
-    draftContext(row),
+    slideshow ? '--- THEIR SLIDES ---' : '--- THEIR DRAFT ---',
+    slideshow ? slideContext(row) : draftContext(row),
     past ? '\n--- THE CONVERSATION SO FAR ---\n' + past : '',
     '',
     '--- WHAT THEY JUST ASKED ---',
@@ -339,12 +482,35 @@ function buildPrompt(row, messages, question) {
     'Reply with ONLY a JSON object: {"reply": "your answer here", "edits": []}',
     'Put your whole answer in the "reply" string. No commentary outside the JSON, no code fences.',
     'Always write something in "reply", even when the edits are the real answer.',
+    // Asked for by Will, 2026-08-19.
+    'HOW TO WRITE THE REPLY:',
+    '- Use simple, everyday words. Short sentences. Write it for a high-school student,',
+    '  not for a teacher. If a plain word will do, use the plain word.',
+    '- Do exactly what you were asked and nothing else. Do not add extra sections, extra',
+    '  slides, extra paragraphs, tidying-up or improvements that were not asked for. If you',
+    '  think something else needs doing, say so in one line and wait to be asked.',
+    '- When you change something, the reply is ONE SENTENCE. "Added bullets to slides 2-4."',
+    '  "Wrote notes for slide 3." That is the whole reply. Do not list the changes one by',
+    '  one, do not repeat the new text back, and do not explain your reasoning — the app',
+    '  prints what changed underneath you.',
+    '- Do not add "two things I noticed" or any other advice that was not asked for. If',
+    '  something really matters, it is one short sentence at the end, not a paragraph.',
+    '- Never claim you cannot see Canvas. The assignment above came from Canvas.',
     ...editShapes,
     // Anything printed after the closing brace is thrown away by the parser, and
     // Claude Code likes to append its own "Sources:" list there. For schoolwork
     // the sources are worth more than most of the answer, so they have to be
     // asked for INSIDE the string.
-    'If you looked anything up, end the reply string with a blank line, then "Sources:" and the links.',
+    // Structured, not appended prose: the page turns these into a clickable
+    // list, and "where" is what lets hovering one highlight the part of the
+    // work it backs up.
+    'If you looked anything up, put the sources in a "sources" list instead of in the reply:',
+    '  "sources": [{"title": "short name of the page", "url": "https://...",',
+    '               "where": "which box it backs up", "quote": "a few words from that box"}]',
+    '"where" is a box name from this page (' + boxHint + '). "quote" is a SHORT phrase copied',
+    'exactly out of that box that the source supports — it is used to highlight the spot.',
+    'Leave "sources" out entirely if you did not look anything up. Never write a Sources',
+    'section into the reply text.',
   ].join('\n');
 }
 
@@ -367,12 +533,32 @@ function readOccurrence(v) {
 // whitelist: "regex" and "html" are real features of applyEdits, but nothing the
 // model says should reach them — one is a way to hang the app, the other a way
 // to inject raw markup into a student's document.
-function cleanEdit(raw, { allowRewrite }) {
+function cleanEdit(raw, { allowRewrite, allowed = new Set([DRAFT_BOX]) }) {
   if (!raw || typeof raw !== 'object') return null;
 
-  const target = (asString(raw.target) || 'draft').trim().toLowerCase();
-  if (!EDIT_TARGETS.has(target)) {
-    return { refused: { find: `(${target})`, reason: 'that is not a box this page can edit' } };
+  // A missing target means the only box there is. On a slideshow there is no
+  // single obvious one, so an untargeted edit is refused rather than guessed at —
+  // guessing would drop slide 6's bullets onto slide 1.
+  const only = allowed.size === 1 ? [...allowed][0] : null;
+  const target = (asString(raw.target) || only || '').trim().toLowerCase();
+  if (!target) {
+    return {
+      refused: {
+        find: '(an edit)',
+        reason: 'it did not say which box to change, and this page has more than one',
+      },
+    };
+  }
+  if (!allowed.has(target)) {
+    const known = [...allowed].join(', ');
+    return {
+      refused: {
+        find: `(${target})`,
+        reason: known
+          ? `there is no box called "${target}" on this page — it has: ${known}`
+          : 'that is not a box this page can edit',
+      },
+    };
   }
   const why = asString(raw.why) ? raw.why.trim().slice(0, 200) : '';
 
@@ -428,7 +614,43 @@ function cleanEdit(raw, { allowRewrite }) {
 // branch, which threw every edit away and printed the JSON to the student. Since
 // the rules tell Claude not to restate its changes, that is exactly the shape it
 // tends to produce when asked to write something.
-function readAnswer(raw, { allowRewrite = true } = {}) {
+
+// Sources, if it looked anything up. Only http(s) links survive: the list is
+// rendered as clickable links, so a javascript: or file: url would be a way to
+// get something nasty onto the page from a model reply.
+function readSources(obj, allowed) {
+  if (!obj || !Array.isArray(obj.sources)) return [];
+  const out = [];
+  for (const raw of obj.sources) {
+    if (!raw || typeof raw !== 'object') continue;
+    const url = asString(raw.url) ? raw.url.trim() : '';
+    if (!/^https?:\/\//i.test(url)) continue;
+    const where = (asString(raw.where) || '').trim().toLowerCase();
+    out.push({
+      title: (asString(raw.title) ? raw.title.trim() : url).slice(0, 160),
+      url: url.slice(0, 500),
+      // Only a box that really exists on this page — otherwise hovering it
+      // would highlight nothing and look broken.
+      where: allowed && allowed.has(where) ? where : '',
+      quote: (asString(raw.quote) ? raw.quote.trim() : '').slice(0, 160),
+    });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+
+// The model is told to send sources as data. When it writes a "Sources:" block
+// into the reply anyway, that block is stripped — otherwise the same links show
+// up twice, once as text and once in the popup.
+function stripSourceBlock(reply) {
+  const t = String(reply || '');
+  const at = t.search(/\n\s*(?:\*\*)?sources\s*:?(?:\*\*)?\s*\n/i);
+  if (at === -1) return t.trim();
+  const tail = t.slice(at);
+  // Only cut it if what follows really is a list of links.
+  return /https?:\/\//.test(tail) ? t.slice(0, at).trim() : t.trim();
+}
+function readAnswer(raw, { allowRewrite = true, allowed = new Set([DRAFT_BOX]) } = {}) {
   let obj = null;
   try {
     obj = claude.parseJson(raw);
@@ -437,12 +659,13 @@ function readAnswer(raw, { allowRewrite = true } = {}) {
   // "has the keys we asked for", not "has content in them" — {"reply":null} is a
   // parsed answer with nothing in it, not prose that happens to look like JSON.
   if (obj && typeof obj === 'object' && ('reply' in obj || 'edits' in obj)) {
-    const reply = asString(obj.reply) ? obj.reply.trim() : '';
+    const reply = stripSourceBlock(asString(obj.reply) ? obj.reply : '');
+    const sources = readSources(obj, allowed);
     const edits = [];
     const refused = [];
     if (Array.isArray(obj.edits)) {
       for (const item of obj.edits) {
-        const cleaned = cleanEdit(item, { allowRewrite });
+        const cleaned = cleanEdit(item, { allowRewrite, allowed });
         if (!cleaned) refused.push({ find: '(an edit)', reason: 'it did not say what to change' });
         else if (cleaned.refused) refused.push(cleaned.refused);
         else edits.push(cleaned.edit);
@@ -456,7 +679,7 @@ function readAnswer(raw, { allowRewrite = true } = {}) {
     // Return here whether or not anything is in it. An empty but valid answer is
     // still a parsed answer, and falling through to the raw-text branch printed
     // the literal JSON into the chat for the student to read.
-    return { reply, edits, refused };
+    return { reply, edits, refused, sources };
   }
 
   const text = String(raw || '').replace(/^```(?:json)?\s*|\s*```$/g, '').trim();
@@ -469,6 +692,18 @@ function readReply(raw) {
 }
 
 // ---- changing the draft ---------------------------------------------------
+
+// Plain text -> editor HTML. richtext knows that "1. a" starts an ORDERED
+// LIST and "- a" a bullet one, and merges numbered points written with blank
+// lines between them into a single list instead of five lists of one. Without
+// this, everything Claude writes arrives as one <p> and the numbers sit in the
+// prose as characters — which is exactly what a list looked like before.
+function htmlFromPlain(text) {
+  if (richtext && typeof richtext.textToHtml === 'function') {
+    try { return richtext.textToHtml(text); } catch { /* fall through */ }
+  }
+  return proofread.textToHtml(text);
+}
 
 function htmlToPlain(html) {
   if (richtext && typeof richtext.parseHtml === 'function' && typeof richtext.toPlainText === 'function') {
@@ -489,41 +724,123 @@ function persistDraft(db, assignmentId, html, text) {
 // Runs the edits and writes the result. The draft goes to Claude as plain text
 // but is stored as HTML, so the find strings it sends back are plain — that
 // mismatch is exactly what proofread's tolerant matcher exists to bridge.
-function applyDraftEdits(db, row, edits, refused, { trimmed = false } = {}) {
+
+// In a bullets box one LINE is one bullet, so an insert at the start or end
+// has to arrive on its own line. Without this, "add a bullet about the vote"
+// glued the new text onto the end of the last bullet and the slide came back
+// with the same number of bullets, one of them twice as long.
+// Anchored inserts (after/before some text) are left alone — those are
+// deliberately mid-line.
+function spaceBulletInserts(edits) {
+  return edits.map((e) => {
+    if (e.insert == null || e.after || e.before) return e;
+    const payload = String(e.insert);
+    if (!payload.trim()) return e;
+    if (e.at === 'start') {
+      return payload.endsWith(NEWLINE) ? e : { ...e, insert: payload + NEWLINE };
+    }
+    return payload.startsWith(NEWLINE) ? e : { ...e, insert: NEWLINE + payload };
+  });
+}
+// Runs the edits box by box and writes the results.
+//
+// Edits are grouped by target and each box is processed on its own, so a
+// message can change slide 4's bullets and slide 7's title in one go without
+// either touching the other. A box whose edits all fail is simply not written.
+//
+// Ordering matters within a box (each edit sees the text the one before left)
+// and does not matter between boxes, which is why grouping is safe.
+function applyBoxEdits(db, row, edits, refused, { trimmed = false } = {}) {
   const notes = Array.isArray(refused) ? refused.slice() : [];
-  const wanted = edits.filter((e) => e.target === 'draft');
-  if (!wanted.length) {
-    return { changed: false, note: notes.length ? proofread.summarise([], notes) : '', draft: null };
+  const list = Array.isArray(edits) ? edits : [];
+
+  const groups = new Map();
+  for (const e of list) {
+    const key = e.target || DRAFT_BOX;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
   }
 
-  const before = {
-    html: row.draft_html == null ? null : String(row.draft_html),
-    text: String(row.draft_text || ''),
-  };
-  const result = proofread.applyEdits(before, wanted, { toPlainText: htmlToPlain });
+  if (!groups.size) {
+    return {
+      changed: false,
+      note: notes.length ? proofread.summarise([], notes) : '',
+      draft: null,
+      slides: null,
+    };
+  }
 
-  // When the draft was cut short, "could not find that text" is true of what
-  // Claude was shown and false of the draft. Say which.
-  const skipped = notes.concat(
-    result.skipped.map((s) => (
-      trimmed && /could not find that text/.test(s.reason)
-        ? { ...s, reason: `${s.reason} — though it was only sent the first part, so it may not have seen it` }
-        : s
-    ))
-  );
-  const note = proofread.summarise(result.applied, skipped);
+  const applied = [];
+  const skipped = notes.slice();
+  let draftResult = null;
+  let slides = isSlideshow(row) ? slidesOf(row) : null;
+  let slidesTouched = false;
 
-  if (!result.applied.length) return { changed: false, note, draft: null };
+  for (const [target, group] of groups) {
+    const before = loadBox(slides ? { ...row, slides_json: JSON.stringify(slides) } : row, target);
+    if (!before) {
+      skipped.push({ find: '(' + target + ')', reason: 'that box is not on this page any more' });
+      continue;
+    }
 
-  persistDraft(db, row.id, result.html, result.text);
-  // `applied` is not decoration: public/app.js reads r.draft.applied to write the
-  // "N fixes applied to your writing" status line. Drop it and that line renders the
-  // word "undefined" to the student.
+    const bullets = target !== DRAFT_BOX && slideBoxRef(target).field === 'bullets';
+    const result = proofread.applyEdits(before, bullets ? spaceBulletInserts(group) : group, {
+      toPlainText: htmlToPlain,
+      toHtml: htmlFromPlain,
+    });
+
+    // When the draft was cut short, "could not find that text" is true of what
+    // Claude was shown and false of the draft. Say which.
+    for (const sk of result.skipped) {
+      skipped.push(
+        trimmed && target === DRAFT_BOX && /could not find that text/.test(sk.reason)
+          ? { ...sk, reason: sk.reason + ' — though it was only sent the first part, so it may not have seen it' }
+          : sk
+      );
+    }
+    // The receipt has to say WHICH box changed once there is more than one, or
+    // "changed 3 things" on a 12-slide deck tells the student nothing.
+    for (const ap of result.applied) {
+      applied.push(target === DRAFT_BOX ? ap : { ...ap, box: target });
+    }
+    if (!result.applied.length) continue;
+
+    if (target === DRAFT_BOX) {
+      draftResult = result;
+    } else {
+      const ref = slideBoxRef(target);
+      const slide = slides[ref.index];
+      if (ref.field === 'title') slide.title = String(result.text || '').split(NEWLINE)[0].trim();
+      // Notes are free prose, so unlike bullets the line breaks are kept as
+      // typed — they come out in the PowerPoint notes pane exactly like this.
+      else if (ref.field === 'notes') slide.notes = String(result.text || '');
+      else slide.bullets = textToBullets(result.text);
+      slidesTouched = true;
+    }
+  }
+
+  const note = proofread.summarise(applied, skipped);
+  if (!applied.length) return { changed: false, note, draft: null, slides: null };
+
+  if (draftResult) persistDraft(db, row.id, draftResult.html, draftResult.text);
+  if (slidesTouched) require('./api').saveSlides(Number(row.id), slides);
+
   return {
     changed: true,
     note,
-    draft: { html: result.html, text: result.text, applied: result.applied.length },
+    // The applied count is not decoration: public/app.js reads r.draft.applied to write the
+    // "N fixes applied to your writing" status line. Drop it and that line renders the
+    // word "undefined" to the student.
+    draft: draftResult
+      ? { html: draftResult.html, text: draftResult.text, applied: applied.length }
+      : null,
+    slides: slidesTouched ? slides : null,
   };
+}
+
+// Kept under its old name: the drive harness and the tests call it directly.
+function applyDraftEdits(db, row, edits, refused, opts) {
+  return applyBoxEdits(db, row, edits, refused, opts);
 }
 
 // ---- sending --------------------------------------------------------------
@@ -555,18 +872,50 @@ async function sendMessage(assignmentId, questionRaw, { signal } = {}) {
 
 async function runSend(id, question, signal) {
   const db = getDb();
-  const row = db
+  const base = db
     .prepare(
       `SELECT a.*, c.name AS class_name FROM assignments a
        LEFT JOIN classes c ON c.id = a.class_id WHERE a.id = ?`
     )
     .get(id);
-  if (!row) return { ok: false, error: 'That assignment is gone.', question };
+  if (!base) return { ok: false, error: 'That assignment is gone.', question };
   if (claude.aiDisabled()) {
     return { ok: false, error: 'Claude is switched off on this copy of Slate.', question };
   }
 
   const past = history(id);
+
+  // Everything Canvas knows, pulled fresh when a conversation STARTS.
+  //
+  // Only on the first message. It is a network round trip, and re-pulling
+  // before every question would put a Canvas call in front of each turn for
+  // information that has not moved. Sync runs hourly, so without this the chat
+  // could be answering about instructions a teacher rewrote an hour ago.
+  //
+  // Fail-soft on purpose: a Canvas that will not answer leaves the stored row
+  // exactly as it was and the chat carries on with what the last sync gave it.
+  // Never worth failing a question over.
+  let row = base;
+  if (!past.length) {
+    try {
+      const api = require('./api');
+      await api.refreshFromCanvas(id);
+      // Reads whatever the teacher attached — a worksheet, a rubric, a PDF —
+      // so the answer is about the file too, not just the description.
+      await api.ensureAttachmentText(id);
+      const reread = db
+        .prepare(
+          'SELECT a.*, c.name AS class_name FROM assignments a '
+          + 'LEFT JOIN classes c ON c.id = a.class_id WHERE a.id = ?'
+        )
+        .get(id);
+      if (reread) row = reread;
+    } catch (e) {
+      console.warn('[chat] Canvas pull at chat start failed:', e.message);
+    }
+  }
+
+  const allowed = new Set(boxesFor(row));
   const prompt = buildPrompt(row, past, question);
   const trimmed = draftWasTrimmed(row);
 
@@ -584,7 +933,7 @@ async function runSend(id, question, signal) {
     return { ok: false, error: "Couldn't reach Claude. Check Claude Code is installed and signed in.", question };
   }
 
-  const answer = readAnswer(raw, { allowRewrite: !trimmed });
+  const answer = readAnswer(raw, { allowRewrite: !trimmed, allowed });
   if (!answer.reply && !answer.edits.length && !answer.refused.length) {
     return { ok: false, error: 'Claude came back with nothing. Try asking again.', question };
   }
@@ -599,7 +948,7 @@ async function runSend(id, question, signal) {
       // and the student may well have kept typing during it — editing the row we
       // fetched before the await would throw that typing away.
       const fresh = db
-        .prepare('SELECT id, draft_html, draft_text FROM assignments WHERE id = ?')
+        .prepare('SELECT id, draft_html, draft_text, slides_json, build_mode FROM assignments WHERE id = ?')
         .get(id);
       outcome = applyDraftEdits(db, fresh || row, answer.edits, answer.refused, { trimmed });
     } catch (e) {
@@ -614,13 +963,16 @@ async function runSend(id, question, signal) {
   const stored = outcome.note ? `${prose}\n\n${RECEIPT_MARK}${outcome.note}` : prose;
 
   addMessage(db, id, 'you', question);
-  addMessage(db, id, 'claude', stored);
+  addMessage(db, id, 'claude', stored, answer.sources);
 
   return {
     ok: true,
     messages: history(id),
     draftChanged: outcome.changed,
     draft: outcome.draft,
+    // Present only when a slide box changed, so the builder can redraw itself
+    // without a page reload and without re-saving what it already had.
+    slides: outcome.slides || null,
     warning: workspaceWarnings(),
   };
 }

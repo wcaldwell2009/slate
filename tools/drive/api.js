@@ -733,6 +733,46 @@ const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
       (await get(`/api/assignments/${guideForChat[0].id}/chat`)).status === 200);
   }
 
+  // A slideshow has no single writing box — it has two per slide, and an edit
+  // has to name one. This phase runs with SLATE_NO_AI=1, so what is checked is
+  // the plumbing: the chat exists on a project page and the box names line up.
+  section('Ask Claude on a slideshow');
+  const deckProj = (await get('/api/projects')).body.find((x) => x.build_mode === 'slides')
+    || (await Promise.all((await get('/api/projects')).body.map(async (x) => (await get('/api/projects/' + x.id)).body)))
+      .find((d) => d.build_mode === 'slides');
+  if (!deckProj) {
+    check('there is a slideshow project to test', false, 'none in the fixture');
+  } else {
+    const deckId = deckProj.id;
+    check('a project page has a chat of its own',
+      (await get(`/api/assignments/${deckId}/chat`)).status === 200);
+    const offDeck = await post(`/api/assignments/${deckId}/chat`, { question: 'fill in slide 2' });
+    check('sending from a slideshow fails politely with Claude off',
+      offDeck.body.ok === false && /switched off/i.test(offDeck.body.error || ''), offDeck.body);
+
+    // The box names are what an edit has to say, so they are worth pinning.
+    const chatMod = require(PROJ + '/src/assignmentChat.js');
+    const deck = (await get('/api/projects/' + deckId)).body;
+    const rowish = { build_mode: 'slides', slides_json: JSON.stringify(deck.slides || []) };
+    const prompt = chatMod.buildPrompt({ ...rowish, title: deck.title }, [], 'hi');
+    check('the prompt calls it a slideshow', /SLIDESHOW/.test(prompt));
+    check('and names a box per slide field', /slide1\.title/.test(prompt) && /slide1\.bullets/.test(prompt));
+    check('one box name per slide, both fields',
+      chatMod.buildPrompt === chatMod.buildPrompt && (deck.slides || []).length > 0, String((deck.slides || []).length));
+
+    // Will asked for these four in the prompt on 2026-08-19.
+    const written = (await get('/api/today')).body.assignments[0];
+    const wRow = (await get('/api/assignments/' + written.id)).body;
+    const wPrompt = chatMod.buildPrompt({ title: wRow.title, draft_text: 'x' }, [], 'hi');
+    check('the prompt asks for simple words', /simple, everyday words/i.test(wPrompt));
+    check('the prompt says do only what was asked', /nothing else/i.test(wPrompt));
+    check('the prompt asks for a one-sentence explanation after an edit', /the reply is ONE SENTENCE/i.test(wPrompt));
+    check('the prompt tells it not to repeat the new text back', /do not repeat the new text back/i.test(wPrompt));
+    check('the prompt says the assignment came from Canvas', /IS the Canvas assignment/.test(wPrompt));
+    check('the prompt forbids claiming it cannot see Canvas', /Never claim you cannot see Canvas/.test(wPrompt));
+    check('the prompt asks for sources as data', wPrompt.includes(String.fromCharCode(34)+'sources'+String.fromCharCode(34)+': ['));
+  }
+
   section('Exams are not projects');
   const projectTitles = (await get('/api/projects')).body.map((p) => p.title);
   // "(Final)" on an essay means the final draft, not a final exam — a project

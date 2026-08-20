@@ -97,6 +97,13 @@ const NS_A = 'http://schemas.openxmlformats.org/drawingml/2006/main';
 
 // Slate look. 16:9 slide = 12192000 x 6858000 EMU.
 const SLIDE_W = 12192000, SLIDE_H = 6858000;
+const NEWLINE = String.fromCharCode(10);
+
+// Speaker notes off a slide. Trimmed, because whitespace-only notes should
+// produce no notes part at all rather than an empty one.
+function noteText(slide) {
+  return String((slide && slide.notes) || '').trim();
+}
 const C_BG = '14181D', C_SURFACE = '1F252C', C_ACCENT = '8CA891', C_TEXT = 'E8E6E1', C_MUTED = '6B7078';
 const MARGIN = 548640;                      // 0.6"
 const CONTENT_W = SLIDE_W - MARGIN * 2;
@@ -221,6 +228,33 @@ function slideLayoutXml() {
 // slides: [{ title, bullets[], photo? }] — slide 1 IS the title slide, so what
 // Will sees in the builder is exactly what comes out.
 // opts: { title, subtitle } are only fallbacks for an unfilled title slide.
+
+// ---------- speaker notes -------------------------------------------------
+// A .pptx keeps notes in their own parts, not on the slide. Each slide that
+// has notes gets a ppt/notesSlides/notesSlideN.xml, related BOTH ways: the
+// slide points at its notes part, and the notes part points back at the slide.
+// PowerPoint will offer to "repair" the file if any of the four pieces is
+// missing — the part, the two rels, or the [Content_Types] override.
+//
+// There must also be a notesMaster, and its id list has to sit between
+// sldMasterIdLst and sldIdLst in presentation.xml: p:presentation is a
+// SEQUENCE, so an element in the wrong order is a schema violation and gets
+// the repair prompt too.
+function notesMasterXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:notesMaster xmlns:a="${NS_A}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgRef idx="1001"><a:schemeClr val="bg1"/></p:bgRef></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="2" name="Slide Image Placeholder 1"/><p:cNvSpPr><a:spLocks noGrp="1" noRot="1" noChangeAspect="1"/></p:cNvSpPr><p:nvPr><p:ph type="sldImg"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="1143000" y="685800"/><a:ext cx="4572000" cy="2571750"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="12700"><a:solidFill><a:prstClr val="black"/></a:solidFill></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Notes Placeholder 2"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr><a:xfrm><a:off x="685800" y="3429000"/><a:ext cx="5486400" cy="4114800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr vert="horz" lIns="91440" tIns="45720" rIns="91440" bIns="45720" rtlCol="0" anchor="t"><a:normAutofit/></a:bodyPr><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"/><a:t>Click to edit Master text styles</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/><p:notesStyle><a:lvl1pPr marL="0" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="1200" kern="1200"><a:solidFill><a:schemeClr val="tx1"/></a:solidFill><a:latin typeface="+mn-lt"/></a:defRPr></a:lvl1pPr></p:notesStyle></p:notesMaster>`;
+}
+
+// One notes slide. `index` is 1-based and matches the slide it belongs to.
+function notesSlideXml(text, index) {
+  const paras = String(text || "").split(NEWLINE).map((line) => (
+    line.trim()
+      ? `<a:p><a:r><a:rPr lang="en-US" dirty="0"/><a:t>${xmlEsc(line)}</a:t></a:r></a:p>`
+      : "<a:p><a:endParaRPr lang=\"en-US\"/></a:p>"
+  )).join("");
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:notes xmlns:a="${NS_A}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="2" name="Slide Image Placeholder 1"/><p:cNvSpPr><a:spLocks noGrp="1" noRot="1" noChangeAspect="1"/></p:cNvSpPr><p:nvPr><p:ph type="sldImg"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp><p:sp><p:nvSpPr><p:cNvPr id="3" name="Notes Placeholder 2"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>${paras}</p:txBody></p:sp></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:notes>`;
+}
 function buildPptx(slides, opts = {}) {
   const list = (slides && slides.length) ? slides.slice() : [{ title: opts.title || 'Untitled', bullets: [] }];
   const first = list[0];
@@ -228,40 +262,70 @@ function buildPptx(slides, opts = {}) {
   const subtitle = ((first.bullets || []).map((b) => String(b).trim()).filter(Boolean)[0]) || opts.subtitle || '';
 
   const body = list.slice(1);
-  const docs = [{ xml: titleSlideXml(titleText, subtitle) }];
-  body.forEach((s, i) => docs.push({ xml: contentSlideXml(s, i + 2, list.length) }));
+  const docs = [{ xml: titleSlideXml(titleText, subtitle), notes: noteText(first) }];
+  body.forEach((s, i) => docs.push({ xml: contentSlideXml(s, i + 2, list.length), notes: noteText(s) }));
+  // Only slides that actually have notes get a notes part. An empty notes
+  // slide on every slide is legal but shows up in PowerPoint as a deck where
+  // every page "has" notes, which is worse than not having the part.
+  const anyNotes = docs.some((d) => d.notes);
 
   const entries = [];
 
   const slideRefs = docs.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 1}"/>`).join('');
   const slideOverrides = docs.map((_, i) =>
     `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`).join('');
+  const notesOverrides = !anyNotes ? '' : (
+    '<Override PartName="/ppt/notesMasters/notesMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml"/>'
+    + '<Override PartName="/ppt/theme/theme2.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>'
+    + docs.map((d, i) => (d.notes
+      ? `<Override PartName="/ppt/notesSlides/notesSlide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml"/>`
+      : '')).join('')
+  );
 
   // slide parts + per-slide rels (no media parts — Slate embeds no pictures)
   docs.forEach((d, i) => {
     entries.push({ name: `ppt/slides/slide${i + 1}.xml`, data: d.xml });
+    const notesRel = d.notes
+      ? `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide${i + 1}.xml"/>`
+      : '';
     entries.push({ name: `ppt/slides/_rels/slide${i + 1}.xml.rels`, data:
 `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>` });
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>${notesRel}</Relationships>` });
+
+    if (!d.notes) return;
+    entries.push({ name: `ppt/notesSlides/notesSlide${i + 1}.xml`, data: notesSlideXml(d.notes, i + 1) });
+    // Both ways: the notes part points back at its slide AND at the notes
+    // master. Miss either and PowerPoint repairs the file.
+    entries.push({ name: `ppt/notesSlides/_rels/notesSlide${i + 1}.xml.rels`, data:
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster" Target="../notesMasters/notesMaster1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="../slides/slide${i + 1}.xml"/></Relationships>` });
   });
 
   entries.unshift({ name: '[Content_Types].xml', data:
 `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>${slideOverrides}</Types>` });
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>${slideOverrides}${notesOverrides}</Types>` });
 
   entries.push({ name: '_rels/.rels', data:
 `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/></Relationships>` });
 
+  // p:presentation is a SEQUENCE. notesMasterIdLst goes after sldMasterIdLst
+  // and before sldIdLst; anywhere else is a schema violation.
+  const notesMasterRef = anyNotes
+    ? '<p:notesMasterIdLst><p:notesMasterId r:id="rIdNotesMaster"/></p:notesMasterIdLst>'
+    : '';
   entries.push({ name: 'ppt/presentation.xml', data:
 `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentation xmlns:a="${NS_A}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rIdMaster"/></p:sldMasterIdLst><p:sldIdLst>${slideRefs}</p:sldIdLst><p:sldSz cx="${SLIDE_W}" cy="${SLIDE_H}" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>` });
+<p:presentation xmlns:a="${NS_A}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rIdMaster"/></p:sldMasterIdLst>${notesMasterRef}<p:sldIdLst>${slideRefs}</p:sldIdLst><p:sldSz cx="${SLIDE_W}" cy="${SLIDE_H}" type="screen16x9"/><p:notesSz cx="6858000" cy="9144000"/></p:presentation>` });
 
   const presRels = docs.map((_, i) =>
     `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i + 1}.xml"/>`).join('');
+  const notesMasterPresRel = anyNotes
+    ? '<Relationship Id="rIdNotesMaster" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster" Target="notesMasters/notesMaster1.xml"/>'
+    : '';
   entries.push({ name: 'ppt/_rels/presentation.xml.rels', data:
 `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${presRels}<Relationship Id="rIdMaster" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rIdTheme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/></Relationships>` });
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${presRels}<Relationship Id="rIdMaster" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rIdTheme" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>${notesMasterPresRel}</Relationships>` });
 
   entries.push({ name: 'ppt/theme/theme1.xml', data: themeXml() });
   entries.push({ name: 'ppt/slideMasters/slideMaster1.xml', data: slideMasterXml() });
@@ -273,6 +337,20 @@ function buildPptx(slides, opts = {}) {
   entries.push({ name: 'ppt/slideLayouts/_rels/slideLayout1.xml.rels', data:
 `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/></Relationships>` });
+
+  if (anyNotes) {
+    entries.push({ name: 'ppt/notesMasters/notesMaster1.xml', data: notesMasterXml() });
+    // Its OWN theme part, not a second relationship to theme1. PowerPoint
+    // treats a theme as belonging to one master; sharing theme1 between the
+    // slide master and the notes master made it call the whole file corrupt.
+    entries.push({ name: 'ppt/theme/theme2.xml', data: themeXml() });
+    // The notes master shares theme1 rather than carrying a theme of its own.
+    // Two masters may reference the same theme part; a master with NO theme
+    // relationship is the thing PowerPoint objects to.
+    entries.push({ name: 'ppt/notesMasters/_rels/notesMaster1.xml.rels', data:
+`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme2.xml"/></Relationships>` });
+  }
 
   return makeZip(entries);
 }
@@ -586,6 +664,16 @@ function buildMlaPdf(doc) {
 // ---------- HTML slideshow ------------------------------------------------
 // Same design as the pptx: slide 1 is the title slide, bullets become cards,
 // and a slide marked for a picture gets an empty framed space.
+// Speaker notes in the HTML export. Printed under the slide rather than on it,
+// the same way the .pptx keeps them off the slide and in the notes pane.
+function noteBlock(slide) {
+  const t = noteText(slide);
+  if (!t) return '';
+  const lines = t.split(NEWLINE).filter((l) => l.trim())
+    .map((l) => `<p>${xmlEsc(l)}</p>`).join('');
+  return `<div class="notes"><span>Notes</span>${lines}</div>`;
+}
+
 function buildHtmlSlides(slides, title) {
   const list = (slides && slides.length) ? slides.slice() : [{ title: title || 'Untitled', bullets: [] }];
   const first = list[0];
@@ -603,7 +691,7 @@ function buildHtmlSlides(slides, title) {
     const frame = s.photo ? '<div class="picspace">Picture goes here</div>' : '';
     return `<section class="slide"><div class="kicker">${String(i + 2).padStart(2, '0')}</div>
 <div class="row"><div class="txt"><h2>${xmlEsc(s.title || '')}</h2><div class="ul-rule"></div>${cards}</div>${frame}</div>
-<div class="pagenum">${i + 2} / ${total}</div></section>`;
+<div class="pagenum">${i + 2} / ${total}</div>${noteBlock(s)}</section>`;
   }).join('\n');
 
   return `<!doctype html><html><head><meta charset="utf-8"><title>${xmlEsc(headTitle)}</title>
@@ -619,6 +707,9 @@ h1{font-size:60px;margin:0;color:#8CA891;line-height:1.1}
 .kicker{position:absolute;top:6vh;left:7vw;font-size:13px;letter-spacing:3px;color:#6B7078;font-weight:600}
 .pagenum{position:absolute;right:7vw;bottom:6vh;font-size:13px;color:#6B7078}
 .row{display:flex;gap:3vw;align-items:stretch}
+.notes{position:absolute;left:7vw;right:7vw;bottom:11vh;border-top:1px solid #1F252C;padding-top:10px;color:#6B7078;font-size:14px;line-height:1.5}
+.notes span{display:block;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px}
+.notes p{margin:0 0 5px}
 .txt{flex:1;min-width:0}
 h2{font-size:40px;margin:0 0 14px;color:#8CA891}
 .ul-rule{width:72px;height:5px;background:#8CA891;border-radius:3px;margin-bottom:26px}

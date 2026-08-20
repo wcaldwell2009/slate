@@ -1,7 +1,7 @@
 # Slate — School Tracker App — Project Handoff
 
 ## Last Updated
-2026-08-16 (round 51 — Ask Claude on assignments)
+2026-08-19 (round 54 — sources, short receipts, Canvas wording)
 
 ## What this project is
 Slate is a **local desktop app** that helps Will keep on top of school work. It
@@ -229,6 +229,156 @@ Node (here, inserting a conversation straight into the shots database) before
 the page is photographed, because that server runs with `SLATE_NO_AI=1` and
 cannot have a conversation of its own.
 
+**Round 54 — five things Will reported (2026-08-19).**
+
+**"It says it cannot see Canvas."** It could — `refreshFromCanvas` had already
+pulled it — but nothing in the prompt said the assignment block WAS Canvas, so
+it answered honestly about its tools instead of about what it was holding.
+`assignmentContext` now opens with "This block IS the Canvas assignment, pulled
+from Canvas when this chat started", and TUTOR_RULES adds "Never claim you
+cannot see Canvas". **A model will disclaim a capability it has if you never
+tell it the data is the real thing.**
+
+**"The output is not short."** Two separate causes. The model was writing three
+paragraphs (prompt now says the reply after an edit is ONE SENTENCE, with an
+example), and `summarise` was printing a bullet per change — four slides meant
+four lines. `collapseBoxChanges` groups whole-box edits by field and collapses
+slide numbers into runs: "Updated bullets on slides 2-4." **Word-level edits
+are deliberately NOT collapsed** — on a grammar fix, "their → there" is the
+entire information and a count would hide it.
+
+**"Notes went under each bullet in the PowerPoint."** Not a builder bug —
+`contentSlideXml` never renders notes. Claude was writing note prose INTO the
+`.bullets` box, because "add notes for each bullet point" reads as bullets. The
+prompt now says it in capitals: speaker notes go in a `.notes` box, "notes for
+each bullet" still means `slideN.notes`, and anything longer than about ten
+words is notes in the wrong box. Verified with Will's exact phrasing: bullets
+untouched, notes in all four notes boxes, and PowerPoint shows them in the
+notes pane.
+
+**Sources are structured data now, not text at the end of the reply.**
+`readSources` takes `[{title, url, where, quote}]` off the JSON;
+`stripSourceBlock` removes a "Sources:" section if the model writes one anyway,
+so the links never appear twice. Stored as JSON in `chat_messages.sources`.
+**Only http(s) urls survive** — the list renders as real links, so a
+`javascript:` or `file:` url would be a way to get something nasty onto the
+page from a model reply. A `where` naming a box that is not on this page is
+blanked rather than dropped: the link still shows, it just has nothing to
+highlight.
+
+**The highlight is why `where` exists.** Every editable box carries
+`data-box="slide3.bullets"` etc; `lightBox()` adds `.src-lit` and scrolls it
+into view. **It stays lit until the panel is closed** — Will asked for that,
+and he is right: a highlight that follows the pointer is useless when the thing
+being lit is behind the panel you are pointing at. `clearLitBoxes()` runs on
+close, on shutting the chat, and in `render()`'s teardown.
+
+**Flake, now seen twice:** the live AI phase intermittently reports
+"used the offline fallback" for unstuck and notes when Claude Code is under
+load. Both came back clean on a straight re-run. Re-run before investigating.
+
+**Round 53 — speaker notes, and a thinking indicator (2026-08-19).**
+
+**A slide is now `{title, bullets[], photo, notes}`.** The notes box is on
+every slide card, is the third chat-editable box (`slide3.notes`), and comes
+out in the PowerPoint notes pane. Unlike bullets, its line breaks are kept as
+typed — it is prose to read aloud, not a list.
+
+**THE NOTES MASTER MUST HAVE ITS OWN THEME PART, AND THIS COST AN HOUR.**
+Pointing `notesMaster1.xml.rels` at the existing `theme1.xml` — which the
+slide master already owns — makes PowerPoint refuse the whole file with
+"The file or directory is corrupted and unreadable" (0x80070570). Not a
+repair prompt: a flat refusal. The package is valid at both the ZIP and OPC
+layers (`System.IO.Packaging` opens it happily), so nothing short of real
+PowerPoint finds it. `ppt/theme/theme2.xml` is a byte-identical copy that
+exists purely so the notes master owns one. A smoke test pins it.
+
+**The other three pieces that each cause a repair prompt on their own:** the
+`[Content_Types]` override for every notesSlide, the relationship BOTH ways
+(slide → notes part, notes part → slide *and* notes master), and
+`notesMasterIdLst` sitting between `sldMasterIdLst` and `sldIdLst` —
+`p:presentation` is a SEQUENCE, so out of order is a schema violation.
+
+**A slide with no notes gets no notes part**, and whitespace-only notes count
+as none (`noteText()` trims). An empty notes part on every slide is legal but
+shows in PowerPoint as a deck where every page has notes.
+
+**`saveSlides` is a whitelist**, so a field missing from its map is dropped on
+every autosave. That is what would silently eat notes; the same is true of
+`normalize()` in the builder.
+
+Verified in real PowerPoint over COM, through the whole app: Claude wrote the
+notes for slide 2 from the chat, the .pptx came off the download endpoint, and
+PowerPoint opened it clean with the notes on slides 1 and 2 and none on 3.
+
+**`chatSpark()`** is the waiting state — a four-pointed star in `--accent`
+that pulses opacity and rotates 45°, 14px, inline with the word. Drawn as SVG
+for the same reason the launcher icon is (round 24 took every emoji out), and
+it honours `prefers-reduced-motion`. The `.chat-sub` explainer under the
+heading is gone — Will asked for it off.
+
+**Round 52 — slideshow boxes, formatting, and a fresh Canvas pull (2026-08-19).**
+
+**A "box" is now the unit an edit names, and that is the whole design.**
+`EDIT_TARGETS` became `boxesFor(row)`: an assignment or essay has one box
+(`draft`), a slideshow has two per slide (`slide3.title`, `slide3.bullets`).
+`loadBox` reads one, `applyBoxEdits` groups the turn's edits by target and runs
+each box separately, so one message can change slide 4 and slide 7 and touch
+nothing between them. **Slide numbers are 1-based, matching the builder** —
+converted once, in `slideBoxRef`; getting that off by one sends every edit to
+the wrong slide.
+
+**An edit with no `target` is REFUSED when the page has more than one box.**
+Guessing would drop slide 6's bullets onto slide 1. With a single box it still
+defaults, so assignment pages behave exactly as before.
+
+**`opts.toHtml` is the formatting fix and it is one line of wiring.**
+`proofread.textToHtml` wraps every block in `<p>`; `richtext.textToHtml` knows
+"1. a" is an ORDERED LIST, merges numbered points separated by blank lines into
+one list, and keeps a short heading line on its own line. `applyEdits` now takes
+`toHtml` the same way it already took `toPlainText`, and assignmentChat passes
+richtext's. That is the difference between a real list and "1. a 2. b 3. c"
+sitting inside a paragraph — exactly what Will reported. `asMarkup` also uses
+`textToInlineHtml` now, so a multi-line find/replace keeps its line breaks.
+
+**In a bullets box one LINE is one bullet**, so `spaceBulletInserts` puts a
+newline in front of an `at: "end"` insert. Without it "add a bullet" glued the
+new text onto the end of the last one and the slide came back with the same
+number of bullets, one of them twice as long. Anchored inserts (after/before)
+are left alone — those are deliberately mid-line.
+
+**`api.refreshFromCanvas(id)` runs on the FIRST message of a conversation**
+(and only then — it is a network round trip), followed by
+`ensureAttachmentText`. Sync is hourly, so without it the chat could be
+answering about instructions a teacher rewrote an hour ago. Fail-soft: a Canvas
+that will not answer leaves the row alone. It only writes fields Canvas owns
+(description, files, points, due_at, submission_types) and **never** the draft,
+slides, status or completion. When the description changes it clears
+`instructions_simple` and `attachment_text` so they get rebuilt.
+
+**Claude does NOT get the Canvas API itself.** Slate fetches and puts it in the
+prompt. Handing the hidden `claude -p` a Canvas token would put a real key on a
+process whose tool list is deliberately WebSearch/WebFetch and nothing else.
+
+**`getAssignment(courseId, assignmentId)` added to both clients.** The mock
+coerces the course id to a Number (the fixture keys courses numerically,
+`canvas_class_id` is TEXT, and a strict filter matched nothing) and calls
+`module.exports.listAssignments` so tests that stub the mock still work.
+
+**Frontend:** `pageSlides` mirrors `pageDraft` — the builder registers an
+`adopt(slides)` and the chat calls it when the response carries `slides`. It
+deliberately does NOT save: the server already wrote them, and posting the copy
+the page was holding would undo the change it just made. Released in
+`render()`'s teardown alongside `pageChat`.
+
+The panel subtitle was "About this assignment. It will not write it for you."
+That stopped being true when the rules were rewritten in round 51c, so it now
+says what the panel does instead. **A UI that claims a limit the app no longer
+has is worse than one that claims nothing.**
+
+Prompt additions Will asked for: simple everyday words, do only what was asked,
+and after an edit keep the reply to a sentence or two rather than repeating the
+new text (the receipt already lists every change). Pinned by drive checks.
 ## GitHub — the project is a git repo now (round 50, 2026-08-15)
 **`https://github.com/wcaldwell2009/slate`, PRIVATE.** The workshop folder is
 the repo; `main` is the branch. Auth is the GitHub CLI (`gh`, installed via
@@ -1645,6 +1795,24 @@ Open, all offered and none refused — just not answered yet:
 - Will's instruction in a message IS approval.
 
 ## Activity Log
+- **2026-08-19 (round 54)** — Fixed the chat claiming it could not see Canvas,
+  cut the reply and the change list down to a sentence each, stopped speaker
+  notes being written into the bullets, and added a sources panel: click to see
+  every page it used and which slide it backs up, hover to light that box up
+  until the panel closes. 968 checks + 98 tests + 26 screens; 5 guard tests
+  still red by design.
+- **2026-08-19 (round 53)** — Speaker notes: a Notes box on every slide, which
+  Claude can fill in one slide at a time, and which comes out in the real
+  PowerPoint notes pane. Found that a notes master sharing the slide master's
+  theme makes PowerPoint reject the file outright. Added a pulsing sage star
+  while Claude is thinking and removed the explainer line under Ask Claude.
+  965 checks + 93 tests + 25 screens; 5 guard tests still red by design.
+- **2026-08-19 (round 52)** — Ask Claude moved onto project pages; on a
+  slideshow it edits individual slide boxes rather than the whole deck. Lists
+  now come out as real lists everywhere (the "1. a 2. b" run-on is fixed), a
+  conversation pulls the assignment fresh from Canvas when it starts, and the
+  prompt asks for plain words and no unrequested extra work.
+  964 checks + 90 tests + 24 screens; 5 guard tests still red by design.
 - **2026-08-16 (round 51)** — Ask Claude on every assignment page: a support-desk
   widget in the bottom-right corner holding a saved conversation that knows the
   assignment, the attached files and Will's draft, can search the web, and

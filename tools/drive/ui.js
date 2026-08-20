@@ -569,8 +569,12 @@ async function renderView(view, extra = '') {
   check('opening it does not throw', errors.length === eChat, errors.slice(eChat).join(' | '));
 
   root = appNode();
-  check('it says it will not write the work',
-    nodesIn(root).some((n) => hasClass(n, 'chat-sub') && /will not write/i.test(n.text || '')));
+  // The subtitle under the heading is gone — Will asked for it off. The empty
+  // state is what tells you what to ask it now.
+  check('there is no explainer line under the heading',
+    !nodesIn(root).some((n) => hasClass(n, 'chat-sub')));
+  check('the panel still says what it is', 
+    nodesIn(root).some((n) => hasClass(n, 'chat-title') && /Ask Claude/.test(n.text || '')));
   const chatBox = inputs(root, 'TEXTAREA').find((n) => hasClass(n, 'chat-input'));
   check('the panel has a question box', !!chatBox);
   const chatSendBtn = buttons(root).find((n) => hasClass(n, 'chat-send'));
@@ -579,8 +583,12 @@ async function renderView(view, extra = '') {
   check('Stop is hidden until something is running', chatStopBtn._classes().includes('hidden'));
   const chatClearBtn = buttons(root).find((n) => hasClass(n, 'chat-icon-btn') && /Clear/.test(n.text || ''));
   check('Clear is hidden while there is nothing to clear', !!chatClearBtn && chatClearBtn._classes().includes('hidden'));
-  check('an empty chat explains what to ask it',
-    nodesIn(root).some((n) => hasClass(n, 'chat-empty') && /look things up/i.test(n.text || '')));
+  // The explainer paragraphs are gone — Will asked them out. An unused chat is
+  // simply empty; the placeholder in the box is what tells you how to start.
+  check('an unused chat shows no explainer text',
+    !nodesIn(root).some((n) => hasClass(n, 'chat-empty')));
+  check('the box still says how to start',
+    (chatBox.placeholder || '').length > 10, chatBox.placeholder);
 
   await chatSendBtn.onclick();                 // empty box: must be a no-op, not a crash
   check('Send with an empty box does nothing and does not throw', errors.length === eChat);
@@ -858,13 +866,40 @@ async function renderView(view, extra = '') {
   run('closePanel(false)');
 
   // ------------------------------------- plain project (no builder at all)
+  section('Ask Claude on project pages');
+  // The widget is no longer assignment-only. It has to be on the slideshow
+  // builder and the essay editor too, with its launcher shut to start with.
+  const deckDetail = pdetails.find((x) => x.build_mode === 'slides');
+  for (const proj of [deckDetail, essay].filter(Boolean)) {
+    await renderView('project', `state.projectId = ${proj.id};`);
+    await settle(600);
+    root = appNode();
+    const launcher = buttons(root).find((x) => hasClass(x, 'chat-launcher'));
+    check(`${proj.build_mode} project has a chat launcher`, !!launcher);
+    const panel = nodesIn(root).find((x) => hasClass(x, 'chat-panel'));
+    check(`${proj.build_mode} project chat starts shut`, !!panel && panel._classes().includes('hidden'));
+    if (launcher) {
+      const before = errors.length;
+      await launcher.onclick(); await settle(400);
+      check(`${proj.build_mode} project chat opens without throwing`,
+        errors.length === before && !nodesIn(appNode()).find((x) => hasClass(x, 'chat-panel'))._classes().includes('hidden'),
+        errors.slice(before).join(' | '));
+      const closeBtn = buttons(appNode()).find((x) => hasClass(x, 'chat-close'));
+      if (closeBtn) { await closeBtn.onclick(); await settle(300); }
+    }
+  }
+  run('state.chatOpen = false;');
+
   section('Project page: plain project (poster)');
   const plain = pdetails.find((p) => p.build_mode === 'none');
   check('a plain project exists', !!plain);
   if (plain) {
     await renderView('project', `state.projectId = ${plain.id};`);
     root = appNode();
-    check('plain project has no essay editor', inputs(root, 'TEXTAREA').length === 0);
+    // The only textarea here is the Ask Claude box — a plain project has no
+    // builder of its own, which is the thing being checked.
+    check('plain project has no essay editor',
+      inputs(root, 'TEXTAREA').every((n) => hasClass(n, 'chat-input')));
     check('plain project has no slide cards', !nodesIn(root).some((n) => n._classes().includes('slide-edit')));
     check('plain project shows instructions', nodesIn(root).some((n) => n._classes().includes('instructions')));
     // The plan is gone from every project page, this one included.

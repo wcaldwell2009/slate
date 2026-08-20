@@ -308,6 +308,65 @@ const STEPS = [
       + " const t=[...document.querySelectorAll('.pv-thumb')];"
       + " if(t[2]) t[2].onclick(); await new Promise(r=>setTimeout(r,400)); }",
   },
+  {
+    // The chat on a slideshow: the boxes it edits are the slide cards behind it.
+    name: 'slides-chat',
+    setup: SLIDE_PROJECT + "if(id){ state.chatOpen=false; state.view='project'; state.projectId=id; await render();"
+      + " await new Promise(r=>setTimeout(r,1400));"
+      + " const l=document.querySelector('.chat-launcher'); if(l) l.click();"
+      + " await new Promise(r=>setTimeout(r,500));"
+      + " const b=document.querySelector('.chat-input'); if(b) b.value='add two bullets to slide 4'; }",
+  },
+  {
+    // The waiting state. chatSpark() is called directly because the real one
+    // only appears while a request is in flight, and this server has AI off.
+    name: 'slides-chat-thinking',
+    setup: SLIDE_PROJECT + "if(id){ state.chatOpen=false; state.view='project'; state.projectId=id; await render();"
+      + " await new Promise(r=>setTimeout(r,1400));"
+      + " const l=document.querySelector('.chat-launcher'); if(l) l.click();"
+      + " await new Promise(r=>setTimeout(r,400));"
+      + " const b=document.querySelector('.chat-input'); if(b){ b.value='write notes for slide 3'; }"
+      + " const st=document.querySelector('.chat-status'); if(st){ st.innerHTML=''; st.appendChild(chatSpark('Thinking...')); }"
+      + " await new Promise(r=>setTimeout(r,300)); }",
+  },
+  {
+    // The sources panel, open, with one row hovered so the box it backs up is
+    // lit behind it. The conversation is put in by hand: this server runs with
+    // SLATE_NO_AI=1 and cannot go and look anything up.
+    name: 'slides-chat-sources',
+    arrange: (dbPath) => {
+      const { DatabaseSync } = require('node:sqlite');
+      const db = new DatabaseSync(dbPath);
+      const row = db.prepare("SELECT id FROM assignments WHERE build_mode='slides' ORDER BY id LIMIT 1").get();
+      if (!row) { db.close(); return; }
+      const slides = [
+        { title: 'The Great Compromise', bullets: ['U.S. History'], photo: false, notes: '' },
+        { title: 'Why they argued', bullets: ['Virginia Plan: seats by population', 'New Jersey Plan: one vote per state', 'Small states feared being outvoted'], photo: false, notes: 'Set up the fight before the fix.' },
+        { title: 'How it was settled', bullets: ['Two houses of Congress'], photo: false, notes: '' },
+      ];
+      db.prepare('UPDATE assignments SET slides_json=? WHERE id=?').run(JSON.stringify(slides), row.id);
+      db.prepare('DELETE FROM chat_messages WHERE assignment_id = ?').run(row.id);
+      const add = (role, text, sources) => db
+        .prepare('INSERT INTO chat_messages (assignment_id, role, text, sources, created_at) VALUES (?,?,?,?,?)')
+        .run(row.id, role, text, sources ? JSON.stringify(sources) : null, new Date().toISOString());
+      add('you', 'put researched bullets on slide 2 about why they disagreed, and cite them');
+      add('claude', 'Added 3 researched bullets to slide 2.' + String.fromCharCode(10,10)
+        + String.fromCharCode(8203,8288,8203) + 'Updated bullets on slide 2.', [
+        { title: 'U.S. Senate — A Great Compromise', url: 'https://www.senate.gov/artandhistory/history/minute/Great_Compromise.htm', where: 'slide2.bullets', quote: 'Small states feared being outvoted' },
+        { title: 'U.S. Senate — The Virginia Plan, 1787', url: 'https://www.senate.gov/about/chronology/origins-1789/documents/virginia-plan.htm', where: 'slide2.bullets', quote: 'Virginia Plan: seats by population' },
+        { title: 'National Constitution Center — Compromises of the Convention', url: 'https://constitutioncenter.org/education/classroom-resource-library', where: 'slide2.notes', quote: 'Set up the fight before the fix.' },
+      ]);
+      db.close();
+    },
+    setup: SLIDE_PROJECT + "if(id){ state.chatOpen=false; state.view='project'; state.projectId=id; await render();"
+      + " await new Promise(r=>setTimeout(r,1400));"
+      + " const l=document.querySelector('.chat-launcher'); if(l) l.click();"
+      + " await new Promise(r=>setTimeout(r,700));"
+      + " const b=document.querySelector('.src-btn'); if(b) b.click();"
+      + " await new Promise(r=>setTimeout(r,300));"
+      + " const rows=document.querySelectorAll('.src-row'); if(rows[0]) rows[0].onmouseenter();"
+      + " await new Promise(r=>setTimeout(r,500)); }",
+  },
   { name: 'email', setup: "closePanel(false); state.view='email'; await render();" },
   { name: 'api-page', setup: "state.view='api'; await render();" },
   { name: 'admin-page', setup: "state.view='admin'; await render();" },

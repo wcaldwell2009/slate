@@ -247,6 +247,92 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     }
   }
 
+  console.log('\n=== 7. Editing one slide box at a time (real Claude) ===');
+  {
+    const ps = await get('/api/projects');
+    const pds = await Promise.all(ps.map((x) => get('/api/projects/' + x.id)));
+    const deckProj = pds.find((d) => d.build_mode === 'slides');
+    if (!deckProj) {
+      check('there is a slideshow to edit', false, 'none in the fixture');
+    } else {
+      const start = [
+        { title: 'The Great Compromise', bullets: ['US History'], photo: false },
+        { title: 'Why they argued', bullets: ['Big states wanted seats by population'], photo: false },
+        { title: 'How it was settled', bullets: [''], photo: false },
+        { title: 'Why it mattered', bullets: [''], photo: false },
+      ];
+      await post(`/api/projects/${deckProj.id}/slides`, { slides: start });
+      await post(`/api/assignments/${deckProj.id}/chat/clear`, {});
+      const deck = async () => (await get(`/api/projects/${deckProj.id}`)).slides;
+
+      const q0 = Date.now();
+      const r = await post(`/api/assignments/${deckProj.id}/chat`, {
+        question: 'put three short bullets on slide 3 about how the argument was settled. only slide 3.',
+      });
+      check(`the chat answers on a slideshow page (${Math.round((Date.now() - q0) / 1000)}s)`,
+        r.ok === true, JSON.stringify(r).slice(0, 200));
+      if (r.ok) {
+        const d = await deck();
+        check('slide 3 was filled in', (d[2].bullets || []).filter(Boolean).length >= 2, JSON.stringify(d[2]));
+        check('it came back as separate bullets, not one long line',
+          (d[2].bullets || []).length >= 2 && d[2].bullets.every((b) => b.length < 220), JSON.stringify(d[2].bullets));
+        check('nothing hand-numbered the bullets',
+          !(d[2].bullets || []).some((b) => /^\s*\d+[.)]\s/.test(b)), JSON.stringify(d[2].bullets));
+        // The whole point of naming boxes: everything else is left alone.
+        check('slide 1 untouched', d[0].title === start[0].title && d[0].bullets.join('|') === 'US History', JSON.stringify(d[0]));
+        check('slide 2 untouched', d[1].bullets.join('|') === start[1].bullets.join('|'), JSON.stringify(d[1]));
+        check('slide 4 untouched — it was not asked for',
+          (d[3].bullets || []).filter(Boolean).length === 0, JSON.stringify(d[3]));
+        check('the page is handed the new deck', Array.isArray(r.slides));
+        const said = r.messages[r.messages.length - 1].text.split(String.fromCharCode(10, 10))[0];
+        check('the reply is a brief explanation, not the slide repeated back',
+          said.length < 400, said);
+        console.log('    ->', JSON.stringify(said.slice(0, 180)));
+        console.log('    slide 3 ->', JSON.stringify(d[2].bullets));
+
+        const r2 = await post(`/api/assignments/${deckProj.id}/chat`, {
+          question: 'change the title of slide 2 to "The argument" and add one bullet to slide 4',
+        });
+        check('two boxes can be changed in one message', r2.ok === true);
+        if (r2.ok) {
+          const d2 = await deck();
+          check('slide 2 title changed', /argument/i.test(d2[1].title), d2[1].title);
+          check('slide 4 gained a bullet', (d2[3].bullets || []).filter(Boolean).length >= 1, JSON.stringify(d2[3]));
+          check('slide 3 kept what it had', d2[2].bullets.join('|') === d[2].bullets.join('|'), JSON.stringify(d2[2]));
+        }
+      }
+      await post(`/api/assignments/${deckProj.id}/chat/clear`, {});
+    }
+  }
+
+  console.log('\n=== 8. Formatting: a list has to come out as a list (real Claude) ===');
+  {
+    const ds = await Promise.all((await get('/api/today')).assignments.map((x) => get('/api/assignments/' + x.id)));
+    const w = ds.find((d) => d.work_mode === 'text');
+    if (!w) {
+      check('there is a typed assignment', false, 'none in the fixture');
+    } else {
+      await post(`/api/assignments/${w.id}/chat/clear`, {});
+      await post(`/api/assignments/${w.id}/draft`, { html: '<p>My notes so far.</p>' });
+      const r = await post(`/api/assignments/${w.id}/chat`, {
+        question: 'add a numbered list of the 3 steps I need to do, at the end of my draft',
+      });
+      check('the request comes back', r.ok === true, JSON.stringify(r).slice(0, 200));
+      const after = await get(`/api/assignments/${w.id}`);
+      check('a numbered list is a REAL list', /<ol>/.test(after.draft_html || ''), (after.draft_html || '').slice(0, 200));
+      check('the numbers are not left sitting in the prose',
+        !/<p>[^<]*1\.\s/.test(after.draft_html || ''), (after.draft_html || '').slice(0, 200));
+      check('what was already written survived', /My notes so far/.test(after.draft_html || ''));
+      const rich = require(PROJ + '/src/richtext.js');
+      const blocks = rich.parseHtml(after.draft_html || '');
+      check('the Word builder sees a list block, not a paragraph',
+        blocks.some((b) => b.type === 'ol' || b.type === 'ul'), JSON.stringify(blocks.map((b) => b.type)));
+      console.log('    ->', JSON.stringify((after.draft_html || '').slice(0, 220)));
+      await post(`/api/assignments/${w.id}/chat/clear`, {});
+      await post(`/api/assignments/${w.id}/draft`, { html: '<p></p>' });
+    }
+  }
+
   console.log(`\n================ AI RESULT (${Math.round((Date.now() - t0) / 1000)}s) ================`);
   console.log(`passed: ${pass}   failed: ${failures.length}`);
   if (failures.length) { console.log('\nFAILURES:'); failures.forEach((f) => console.log('  - ' + f)); }

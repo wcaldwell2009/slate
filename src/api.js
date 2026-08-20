@@ -372,6 +372,69 @@ async function ensureSimplified(id) {
   return { instructions: text };
 }
 
+
+// ---- fresh Canvas pull, for one assignment --------------------------------
+// The chat calls this when a conversation starts, so it answers about what
+// Canvas says NOW. Sync runs hourly; a teacher who rewrites the instructions or
+// attaches a file at 8am would otherwise be invisible to the chat until 9.
+//
+// Deliberately fail-soft and read-only: any Canvas hiccup leaves the stored row
+// exactly as it was and the chat carries on with what it already had. It only
+// ever writes the fields Canvas is the authority on — never the student's
+// draft, slides, status or completion.
+async function refreshFromCanvas(id) {
+  const db = getDb();
+  const row = db
+    .prepare('SELECT id, class_id, canvas_assignment_id, raw_description, files FROM assignments WHERE id=?')
+    .get(Number(id));
+  if (!row || !row.canvas_assignment_id) return { ok: false, reason: 'no Canvas id' };
+
+  const { canvasMode, getClient } = require('./canvas/canvasClient');
+  if (canvasMode() === 'none') return { ok: false, reason: 'Canvas is not connected' };
+
+  const cls = db.prepare('SELECT canvas_class_id FROM classes WHERE id=?').get(row.class_id);
+  if (!cls || !cls.canvas_class_id) return { ok: false, reason: 'no Canvas course id' };
+
+  const client = getClient();
+  if (typeof client.getAssignment !== 'function') return { ok: false, reason: 'client cannot fetch one assignment' };
+
+  let fresh;
+  try {
+    fresh = await client.getAssignment(cls.canvas_class_id, row.canvas_assignment_id);
+  } catch (e) {
+    console.warn('[chat] Canvas refresh failed:', e.message);
+    return { ok: false, reason: e.message };
+  }
+  if (!fresh) return { ok: false, reason: 'Canvas had nothing for that assignment' };
+
+  const description = fresh.description || '';
+  const files = JSON.stringify(
+    require('./attachments').attachmentsFor({ attachments: fresh.attachments, description })
+  );
+  const changed = description !== (row.raw_description || '') || files !== (row.files || '[]');
+
+  db.prepare(
+    `UPDATE assignments SET raw_description=?, files=?, points=?, due_at=?, submission_types=?
+     WHERE id=?`
+  ).run(
+    description,
+    files,
+    fresh.points_possible || 0,
+    fresh.due_at || null,
+    Array.isArray(fresh.submission_types) ? fresh.submission_types.join(',') : (fresh.submission_types || null),
+    row.id
+  );
+
+  // The description changed, so anything derived from it is stale. Clearing
+  // these is what makes the next read rebuild them instead of serving the old
+  // summary of instructions that no longer exist.
+  if (changed) {
+    db.prepare("UPDATE assignments SET instructions_simple=NULL, attachment_state='none', attachment_text=NULL WHERE id=?")
+      .run(row.id);
+  }
+  return { ok: true, changed };
+}
+
 // ---- typed work: drafts + submit-to-file ---------------------------------
 function desktopDir() {
   if (process.env.SLATE_DESKTOP_DIR) return process.env.SLATE_DESKTOP_DIR; // test override
@@ -1136,8 +1199,8 @@ function seedSlides(row) {
   const db = getDb();
   const cls = db.prepare('SELECT name FROM classes WHERE id=?').get(row.class_id);
   return [
-    { title: row.title, bullets: [cls ? cls.name : ''], photo: false },
-    { title: '', bullets: [''], photo: false },
+    { title: row.title, bullets: [cls ? cls.name : ''], photo: false, notes: '' },
+    { title: '', bullets: [''], photo: false, notes: '' },
   ];
 }
 
@@ -1147,6 +1210,10 @@ function saveSlides(id, slides) {
       title: String(s.title || ''),
       bullets: (s.bullets || []).map((b) => String(b)),
       photo: !!s.photo,
+      // Speaker notes. This map is a whitelist, so a field missing from it
+      // is silently dropped on every autosave — which is what would happen
+      // to notes typed into the builder if this line were not here.
+      notes: String(s.notes || ''),
     }))
     : [];
   getDb().prepare('UPDATE assignments SET slides_json=? WHERE id=?').run(JSON.stringify(clean), id);
@@ -1581,6 +1648,7 @@ module.exports = {
   todayAssignments, todayPlan, assignmentDetail, completeAssignment, reopenAssignment, addTime,
   submissionPreview, submitToCanvas, aiCheckFor, headingFor, saveHeading,
   workedToday, secondsWorkedOn, logTime,
+  refreshFromCanvas,
   saveDraft, downloadOptions, performDownload, saveDocStyle, docStyle, draftHtmlFor,
   saveSlides, ensureSimplified, openAssignmentFile, ensureAttachmentText,
   week,

@@ -318,7 +318,11 @@ function locateInHtml(html, find, replace, rawMarkup) {
   // Only guard against matching inside a tag when the find is plain prose. A
   // find that deliberately contains markup is allowed to land on it.
   const ranges = /</.test(find) ? [] : tagRanges(html);
-  const asMarkup = (s) => (rawMarkup ? s : escapeHtml(s));
+  // A replacement is spliced INSIDE an existing block, so it must stay inline —
+  // no <p>, no <ul>. textToInlineHtml escapes it and turns newlines into <br>,
+  // which is the difference between a two-line replacement arriving as two
+  // lines and arriving as one run-on sentence.
+  const asMarkup = (s) => (rawMarkup ? s : textToInlineHtml(s));
 
   const literal = dropSpansInsideTags(
     offsetsOf(html, find).map((start) => ({ start, end: start + find.length })),
@@ -577,6 +581,11 @@ function applyEdits({ html, text }, edits, opts) {
   const timeoutMs = options.regexTimeoutMs == null ? DEFAULT_REGEX_TIMEOUT_MS : options.regexTimeoutMs;
   const allowRegex = options.allowRegex !== false;
   const toPlain = typeof options.toPlainText === 'function' ? options.toPlainText : htmlToText;
+  // Same arrangement as toPlainText, and for the same reason: richtext is the
+  // authority on structure. Without it a numbered list Claude writes arrives
+  // as one <p> with the digits sitting in the prose — "1. a 2. b 3. c" on a
+  // single line, which is what Will reported.
+  const toHtml = typeof options.toHtml === 'function' ? options.toHtml : textToHtml;
 
   const applied = [];
   const skipped = [];
@@ -608,7 +617,7 @@ function applyEdits({ html, text }, edits, opts) {
     if (e.rewrite != null) {
       const r = typeof e.rewrite === 'string' ? { text: e.rewrite } : e.rewrite;
       if (richDraft) {
-        nextHtml = r.html != null ? String(r.html) : textToHtml(r.text != null ? String(r.text) : '');
+        nextHtml = r.html != null ? String(r.html) : toHtml(r.text != null ? String(r.text) : '');
         syncText();
       } else {
         nextText = r.text != null ? String(r.text) : (r.html != null ? toPlain(String(r.html)) : '');
@@ -686,7 +695,7 @@ function applyEdits({ html, text }, edits, opts) {
         // Only a start/end insert may introduce a new block.
         const htmlPayload = rawMarkup
           ? payload
-          : (anchored ? textToInlineHtml(payload) : textToHtml(payload));
+          : (anchored ? textToInlineHtml(payload) : toHtml(payload));
         const anchorText = String(e.after || e.before || '');
         const ranges = /</.test(anchorText) ? [] : tagRanges(nextHtml);
         let out = insertInto(nextHtml, htmlPayload, {
@@ -772,16 +781,25 @@ function shorten(s, n) {
   return str.length > n ? `${str.slice(0, n)}...` : str;
 }
 
+function prettyBox(box) {
+  const m = /^slide(\d+)\.(title|bullets|notes)$/i.exec(String(box || ''));
+  if (!m) return String(box);
+  return `slide ${m[1]} ${m[2].toLowerCase()}`;
+}
+
 function describe(e) {
   const why = e.why ? ` — ${e.why}` : '';
+  // Set by the caller when the page has more than one editable box.
+  const where = e.box ? `[${prettyBox(e.box)}] ` : '';
   if (e.kind === 'rewrite') {
-    return `• the whole draft was replaced (${String(e.replace).length} characters)${why}`;
+    const what = e.box ? `${prettyBox(e.box)} was replaced` : 'the whole draft was replaced';
+    return `• ${what} (${String(e.replace).length} characters)${why}`;
   }
   if (e.kind === 'insert') {
-    return `• added "${shorten(e.replace, 120)}" at ${e.find}${why}`;
+    return `• ${where}added "${shorten(e.replace, 120)}" at ${e.find}${why}`;
   }
   if (e.kind === 'regex') {
-    return `• pattern /${e.find}/ → "${shorten(e.replace, 80)}"${why}`;
+    return `• ${where}pattern /${e.find}/ → "${shorten(e.replace, 80)}"${why}`;
   }
   // Say it plainly when one instruction changed several places — this is the
   // most likely way to get a result you did not intend. And when it changed
@@ -789,17 +807,67 @@ function describe(e) {
   let times = '';
   if (e.count > 1) times = ` — every one of the ${e.count} places it appears`;
   else if (e.total > 1) times = ` — the first of ${e.total} places it appears`;
-  return `• "${e.find}" → "${e.replace}"${times}${why}`;
+  return `• ${where}"${e.find}" → "${e.replace}"${times}${why}`;
 }
 
+
+// "2, 3, 4" reads as "2-4". Slide lists get long fast and a run of numbers is
+// the thing a person actually wants to see.
+function numberRange(nums) {
+  const sorted = [...new Set(nums)].sort((a, b) => a - b);
+  const runs = [];
+  for (const v of sorted) {
+    const last = runs[runs.length - 1];
+    if (last && v === last[1] + 1) last[1] = v;
+    else runs.push([v, v]);
+  }
+  const parts = runs.map(([a, b]) => (
+    a === b ? String(a) : (b === a + 1 ? `${a} and ${b}` : `${a}-${b}`)
+  ));
+  if (parts.length === 1) return parts[0];
+  return parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
+}
+
+// A whole-box change (rewrite / insert) says nothing useful spelled out one by
+// one — "slide 2 bullets was replaced (312 characters)" four times over is the
+// noise Will asked to be rid of. Collapsed to "bullets on slides 2-4".
+//
+// Word-level edits are NOT collapsed: "their -> there" is the entire point of a
+// grammar fix, and a count would hide what actually moved in the writing.
+function collapseBoxChanges(list) {
+  const byField = new Map();
+  for (const e of list) {
+    const m = /^slide(\d+)\.(title|bullets|notes)$/i.exec(String(e.box || ''));
+    const field = m ? m[2].toLowerCase() : 'the draft';
+    if (!byField.has(field)) byField.set(field, []);
+    if (m) byField.get(field).push(Number(m[1]));
+  }
+  const parts = [];
+  for (const [field, nums] of byField) {
+    if (!nums.length) { parts.push(field); continue; }
+    const where = nums.length === 1 ? `slide ${nums[0]}` : `slides ${numberRange(nums)}`;
+    parts.push(`${field} on ${where}`);
+  }
+  if (parts.length === 1) return parts[0];
+  return parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
+}
 function summarise(applied, skipped) {
   const did = applied || [];
   const didnt = skipped || [];
   if (!did.length && !didnt.length) return '';
   const lines = [];
   if (did.length) {
-    lines.push(did.length === 1 ? 'Changed in your draft:' : `Changed in your draft (${did.length}):`);
-    for (const e of did) lines.push(describe(e));
+    // Whole-box changes collapse to one line; word-level ones keep their
+    // before/after, because that IS the information.
+    const wholeBox = did.filter((e) => e.kind === 'rewrite' || e.kind === 'insert');
+    const wordLevel = did.filter((e) => e.kind !== 'rewrite' && e.kind !== 'insert');
+
+    if (wholeBox.length) lines.push('Updated ' + collapseBoxChanges(wholeBox) + '.');
+    if (wordLevel.length) {
+      const noun = wordLevel.some((e) => e.box) ? 'your slides' : 'your draft';
+      lines.push(wordLevel.length === 1 ? `Changed in ${noun}:` : `Changed in ${noun} (${wordLevel.length}):`);
+      for (const e of wordLevel) lines.push(describe(e));
+    }
   }
   if (didnt.length) {
     lines.push(did.length ? '' : 'Nothing was changed.');

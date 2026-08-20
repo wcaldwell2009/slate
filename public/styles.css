@@ -948,7 +948,6 @@ body.chat-open .layout { padding-right: 396px; }
 }
 .chat-head-text { flex: 1; min-width: 0; }
 .chat-title { font-size: 15px; font-weight: 600; }
-.chat-sub { font-size: 11.5px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
 .chat-icon-btn {
   flex: none; background: transparent; color: var(--muted);
   border: none; border-radius: 7px; padding: 4px 8px;
@@ -963,8 +962,6 @@ body.chat-open .layout { padding-right: 396px; }
   display: flex; flex-direction: column; gap: 10px;
   padding: 14px 14px 4px;
 }
-.chat-empty { color: var(--muted); font-size: 13px; line-height: 1.55; }
-.chat-empty p { margin: 0 0 8px; }
 .chat-msg { background: var(--surface-2); border-radius: 12px; padding: 10px 12px; max-width: 92%; }
 .chat-msg.chat-you { background: rgba(140, 168, 145, 0.15); align-self: flex-end; }
 .chat-msg.chat-claude { align-self: flex-start; border-left: 2px solid var(--accent); }
@@ -1000,6 +997,73 @@ body.chat-open .layout { padding-right: 396px; }
   .chat-launcher { right: 14px; bottom: 14px; }
 }
 
+
+/* ---- sources ----
+   A small panel inside the chat bubble, and the highlight it puts on the box
+   it is talking about. Own src- prefix, like every other component here. */
+.src-btn {
+  margin-top: 9px; background: rgba(140, 168, 145, 0.13); color: var(--accent);
+  border: none; border-radius: 999px; padding: 4px 11px;
+  font-family: inherit; font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+.src-btn:hover { background: rgba(140, 168, 145, 0.22); }
+.src-panel {
+  margin-top: 9px; background: var(--bg);
+  border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 11px; overflow: hidden;
+}
+.src-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 7px 6px 7px 11px; border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.src-title { flex: 1; font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+.src-list { max-height: 210px; overflow-y: auto; }
+.src-row {
+  display: block; padding: 8px 11px; text-decoration: none; color: var(--text);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.src-row:last-child { border-bottom: none; }
+.src-row:hover { background: rgba(140, 168, 145, 0.1); }
+.src-name { font-size: 13px; line-height: 1.35; }
+.src-row:hover .src-name { color: var(--accent); text-decoration: underline; }
+.src-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.src-quote { font-size: 11.5px; color: var(--muted); margin-top: 3px; font-style: italic; }
+
+/* The box a hovered source backs up. Stays on until the panel is closed. */
+.src-lit {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  background: rgba(140, 168, 145, 0.09) !important;
+}
+
+/* ---- the thinking spark ----
+   Claude-style four-pointed star, sage, pulsing. Small on purpose: it sits
+   inline with the word, not as a block above it. */
+.chat-thinking { display: flex; align-items: center; gap: 7px; }
+.chat-spark {
+  display: flex; align-items: center; color: var(--accent);
+  animation: chat-spark 1.15s ease-in-out infinite;
+}
+@keyframes chat-spark {
+  0%, 100% { opacity: 0.45; transform: scale(0.85) rotate(0deg); }
+  50%      { opacity: 1;    transform: scale(1.12) rotate(45deg); }
+}
+/* Someone who has asked not to see motion gets a steady star instead. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-spark { animation: none; opacity: 0.85; }
+}
+
+/* ---- speaker notes on a slide card ---- */
+.slide-notes-wrap { margin-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.07); padding-top: 9px; }
+.slide-notes-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+  color: var(--muted); margin-bottom: 5px;
+}
+.slide-notes {
+  width: 100%; min-height: 58px; resize: vertical;
+  background: var(--bg); color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 9px;
+  padding: 8px 11px; font-size: 13.5px; line-height: 1.5; font-family: inherit;
+}
 .hidden { display: none; }
 .mono { font-variant-numeric: tabular-nums; }
 pre.compile { background: var(--surface-2); padding: 16px; border-radius: 10px; white-space: pre-wrap; font-size: 13px; max-height: 320px; overflow: auto; }

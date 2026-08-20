@@ -104,6 +104,7 @@ function titlesToSlides(titles, subtitle) {
     title: t,
     bullets: i === 0 ? [subtitle || ''] : [''],
     photo: false,
+    notes: '',
   }));
 }
 

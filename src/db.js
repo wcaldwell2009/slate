@@ -148,6 +148,7 @@ function migrate(db) {
       assignment_id INTEGER NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
       role          TEXT NOT NULL,   -- 'you' | 'claude'
       text          TEXT NOT NULL,
+      sources       TEXT,            -- JSON [{title, url, where}]
       created_at    TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_chat_assignment ON chat_messages(assignment_id, id);
@@ -250,6 +251,12 @@ function migrate(db) {
   // Which note a card came from, so a note's cards can be found (and cleaned up)
   // later. Null for cards made before class notes existed, and for the older
   // drag-a-file-onto-a-test path.
+  // Sources Claude cited for a message, as JSON: [{title, url, where}].
+  // A column rather than a table because they only ever belong to one message
+  // and are only ever read with it.
+  const chcols = db.prepare('PRAGMA table_info(chat_messages)').all().map((r) => r.name);
+  if (!chcols.includes('sources')) db.exec('ALTER TABLE chat_messages ADD COLUMN sources TEXT');
+
   const fcols = db.prepare('PRAGMA table_info(flashcards)').all().map((r) => r.name);
   if (!fcols.includes('source_note_id')) db.exec('ALTER TABLE flashcards ADD COLUMN source_note_id INTEGER');
   const tcols = db.prepare('PRAGMA table_info(tests)').all().map((r) => r.name);

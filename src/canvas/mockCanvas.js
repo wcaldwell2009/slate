@@ -292,6 +292,19 @@ const EMAILS = [
 async function listCourses() {
   return COURSES.map((c) => ({ ...c }));
 }
+// Mirrors the real client so the fresh-pull path is exercised by the harness
+// rather than only ever running against Will's live Canvas.
+async function getAssignment(courseId, assignmentId) {
+  // The fixture keys courses by NUMBER, and Slate stores canvas_class_id as
+  // TEXT — so a strict filter inside listAssignments matches nothing when the
+  // id arrives straight out of the database. Real Canvas takes either in a URL
+  // and never notices; only the mock is fussy, so it is coerced here.
+  // Through module.exports, not the local binding: tests stub the mock by
+  // reassigning mock.listAssignments, and a direct call would walk straight
+  // past the stub and answer from the untouched fixture.
+  const all = await module.exports.listAssignments(Number(courseId) || courseId);
+  return all.find((x) => String(x.id) === String(assignmentId)) || null;
+}
 async function listAssignments(courseId) {
   // Real Canvas assignments carry an assignment_group_id. The fixture doesn't
   // spell one out per assignment — big work goes in Summative, everything else
@@ -448,6 +461,7 @@ module.exports = {
   isMock: true,
   listCourses,
   listAssignments,
+  getAssignment,
   listQuizzes,
   listSubmissions,
   listPastAssignments,

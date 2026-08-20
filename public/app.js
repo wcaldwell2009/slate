@@ -202,6 +202,7 @@ function richEditor(html, { docStyle, onChange, onStyle, tall } = {}) {
   const bar = el('div', 'editor-bar');
   const surface = el('div', 'editor-surface' + (tall ? ' tall' : ''));
   surface.contentEditable = 'true';
+  surface.dataset.box = 'draft';
   surface.spellcheck = true;
   surface.innerHTML = html || '<p></p>';
 
@@ -304,6 +305,11 @@ function richEditor(html, { docStyle, onChange, onStyle, tall } = {}) {
 // done, switching tabs, going back) flushes the pending save first, so typing
 // can never be thrown away by a re-render.
 let pageDraft = null; // { flush(): Promise, beacon(): void }
+
+// The slide builder, when one is on screen. Same idea as pageDraft: the chat
+// can change a slide box on the server, and the builder has to show the new
+// text without a reload — and WITHOUT saving its own stale copy back over it.
+let pageSlides = null; // { adopt(slides): void }
 
 // `source` is either a textarea (plain) or a rich editor handle, which reports
 // HTML instead. The server derives the plain text from the HTML, so only one of
@@ -1325,10 +1331,120 @@ function chatParagraphs(text) {
   return wrap;
 }
 
+// The waiting state: a small four-pointed spark that pulses, in Slate's sage.
+// Drawn rather than animated with a spinner — a spinner reads as "the page is
+// stuck", and this can genuinely take a minute when it goes off to search.
+// Deliberately small: it sits on one line with the text, not above it.
+function chatSpark(label) {
+  const wrap = el('div', 'chat-thinking');
+  wrap.appendChild(el('span', 'chat-spark',
+    '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">'
+    + '<path d="M12 1.5c.6 4.6 2.4 7.4 6.5 9-4.1 1.6-5.9 4.4-6.5 9-.6-4.6-2.4-7.4-6.5-9'
+    + ' 4.1-1.6 5.9-4.4 6.5-9z" fill="currentColor"/></svg>'));
+  wrap.appendChild(el('span', null, esc(label)));
+  return wrap;
+}
+
+
+// ---- sources ------------------------------------------------------------
+// A message that looked something up carries the pages it used. They open in
+// a small panel over the conversation, and hovering one lights up the box on
+// the page it backs up — which is the point: "where did this fact come from"
+// and "which slide is it on" are the same question.
+//
+// The light STAYS ON until the panel is closed. Will asked for that: a
+// highlight that vanishes as the pointer moves is unreadable when the thing
+// being lit is behind the panel you are pointing at.
+let litBoxes = [];
+
+function clearLitBoxes() {
+  for (const el2 of litBoxes) {
+    try { el2.classList.remove('src-lit'); } catch { /* gone with the page */ }
+  }
+  litBoxes = [];
+}
+
+// Boxes carry data-box so a source can name one. The DOM shim in the drive
+// harness has no attribute selectors, so this returns nothing there — which is
+// why every caller treats "not found" as normal.
+function boxElement(name) {
+  if (!name || !document.querySelectorAll) return null;
+  try {
+    const found = document.querySelectorAll('[data-box]');
+    for (const el2 of found) {
+      if (el2.dataset && el2.dataset.box === name) return el2;
+    }
+  } catch { /* shim */ }
+  return null;
+}
+
+function lightBox(name) {
+  const target = boxElement(name);
+  if (!target || litBoxes.includes(target)) return;
+  target.classList.add('src-lit');
+  litBoxes.push(target);
+  if (typeof target.scrollIntoView === 'function') {
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+}
+
+function hostOf(url) {
+  const m = /^https?:\/\/([^/]+)/i.exec(String(url || ''));
+  return m ? m[1].replace(/^www\./, '') : '';
+}
+
+// "slide3.bullets" is a machine name; say it the way the page does.
+function prettyBoxName(box) {
+  const m = /^slide(\d+)\.(title|bullets|notes)$/i.exec(String(box || ''));
+  if (m) return `slide ${m[1]} ${m[2].toLowerCase()}`;
+  return box === 'draft' ? 'your writing' : '';
+}
+
+function sourcesPanel(host, sources) {
+  clearLitBoxes();
+  const panel = el('div', 'src-panel');
+  const head = el('div', 'src-head');
+  head.appendChild(el('div', 'src-title', sources.length === 1 ? '1 source' : sources.length + ' sources'));
+  const shut = el('button', 'chat-icon-btn src-close', '&#10005;');
+  shut.title = 'Close';
+  shut.onclick = () => { clearLitBoxes(); panel.remove(); };
+  head.appendChild(shut);
+  panel.appendChild(head);
+
+  const list = el('div', 'src-list');
+  sources.forEach((src) => {
+    const row = el('a', 'src-row');
+    row.href = src.url;
+    row.target = '_blank';
+    row.rel = 'noopener noreferrer';
+    row.appendChild(el('div', 'src-name', esc(src.title || src.url)));
+    const meta = prettyBoxName(src.where);
+    row.appendChild(el('div', 'src-meta',
+      esc(hostOf(src.url)) + (meta ? ' &middot; backs up ' + esc(meta) : '')));
+    if (src.quote) row.appendChild(el('div', 'src-quote', '&ldquo;' + esc(src.quote) + '&rdquo;'));
+    // Hover lights the box up; it stays lit until the panel closes.
+    row.onmouseenter = () => lightBox(src.where);
+    list.appendChild(row);
+  });
+  panel.appendChild(list);
+  host.appendChild(panel);
+  return panel;
+}
 function chatBubble(m) {
   const row = el('div', 'chat-msg chat-' + (m.role === 'claude' ? 'claude' : 'you'));
   row.appendChild(el('div', 'chat-who', m.role === 'claude' ? 'Claude' : 'You'));
   row.appendChild(chatParagraphs(m.text));
+  const sources = Array.isArray(m.sources) ? m.sources : [];
+  if (sources.length) {
+    const btn = el('button', 'src-btn',
+      sources.length === 1 ? 'Sources (1)' : `Sources (${sources.length})`);
+    btn.onclick = () => {
+      const open = row.querySelector ? row.querySelector('.src-panel') : null;
+      if (open) { clearLitBoxes(); open.remove(); return; }
+      sourcesPanel(row, sources);
+    };
+    row.appendChild(btn);
+  }
   return row;
 }
 
@@ -1351,7 +1467,9 @@ function chatWidget(body, a) {
   const head = el('div', 'chat-head');
   const heading = el('div', 'chat-head-text');
   heading.appendChild(el('div', 'chat-title', 'Ask Claude'));
-  heading.appendChild(el('div', 'chat-sub', 'About this assignment. It will not write it for you.'));
+  // No subtitle under the heading: Will asked for it off. The empty state in
+  // the log says what to ask it, which is the same information one screen
+  // further in and only when there is nothing else to read.
   head.appendChild(heading);
   const clear = el('button', 'chat-icon-btn hidden', 'Clear');
   clear.title = 'Delete this conversation';
@@ -1396,7 +1514,7 @@ function chatWidget(body, a) {
     if (typeof box.focus === 'function') box.focus();
     showNewest();
   };
-  const shut = () => { state.chatOpen = false; paint(); };
+  const shut = () => { state.chatOpen = false; clearLitBoxes(); paint(); };
   launcher.onclick = open;
   close.onclick = shut;
 
@@ -1405,11 +1523,8 @@ function chatWidget(body, a) {
   const draw = () => {
     log.innerHTML = '';
     if (!messages.length) {
-      const blank = el('div', 'chat-empty');
-      blank.appendChild(el('p', null, 'Ask about anything here — what the assignment means, '
-        + 'background research, or whether what you have written so far holds up.'));
-      blank.appendChild(el('p', null, 'It can look things up on the web.'));
-      log.appendChild(blank);
+      // Nothing here on an unused chat — Will asked the explainer out. The
+      // placeholder in the box below is what says how to start.
       clear.classList.add('hidden');
     } else {
       messages.forEach((m) => log.appendChild(chatBubble(m)));
@@ -1449,7 +1564,8 @@ function chatWidget(body, a) {
     draw();
     showNewest();
     busy(true);
-    status.textContent = 'Thinking… this can take a minute if it is looking things up.';
+    status.innerHTML = '';
+    status.appendChild(chatSpark('Thinking…'));
     const ac = new AbortController();
     pageChat = ac;
     try {
@@ -1462,6 +1578,7 @@ function chatWidget(body, a) {
       const r = await res.json();
       if (r && r.ok) {
         messages = r.messages;
+        status.innerHTML = '';
         status.textContent = '';
         // Grammar corrections land in the editor behind the panel. Told to the
         // draft handle as well as the DOM, so the next autosave doesn't put the
@@ -1471,6 +1588,12 @@ function chatWidget(body, a) {
           status.textContent = r.draft.applied === 1
             ? '1 fix applied to your writing.'
             : `${r.draft.applied} fixes applied to your writing.`;
+        }
+        // Same for a slideshow. The server has already saved these, so the
+        // builder takes them as-is rather than posting them back.
+        if (r.slides && pageSlides) {
+          pageSlides.adopt(r.slides);
+          status.textContent = 'Your slides were updated.';
         }
         draw();
         showNewest();
@@ -1691,6 +1814,11 @@ async function renderProjectPage() {
     actions.appendChild(done);
     body.appendChild(actions);
   }
+
+  // Every project page gets the chat too, not just assignments. On a slideshow
+  // it can edit individual slide boxes; on an essay it works on the draft the
+  // same way it does on an assignment page.
+  chatWidget(body, p);
   app.appendChild(body);
 }
 
@@ -1701,6 +1829,8 @@ function buildSlideMaker(body, p) {
       title: s.title || '',
       bullets: (s.bullets && s.bullets.length) ? s.bullets.slice() : [''],
       photo: !!s.photo,
+      // Dropped here and every redraw would wipe the notes off the deck.
+      notes: s.notes || '',
     }));
     // Slide 1 is always the title slide, pre-filled with the assignment name.
     if (!out.length) out.push({ title: p.title, bullets: [p.class_name || ''], photo: false });
@@ -1722,6 +1852,18 @@ function buildSlideMaker(body, p) {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => post(`/api/projects/${p.id}/slides`, { slides }), 600);
   }
+
+  // The chat edited a slide box on the server. Take the new deck and redraw.
+  // Deliberately does NOT call save(): the server wrote these, and posting the
+  // copy this page happened to be holding would undo the change it just made.
+  pageSlides = {
+    adopt(next) {
+      if (!Array.isArray(next) || !next.length) return;
+      clearTimeout(saveTimer);
+      slides = normalize(next);
+      draw();
+    },
+  };
   // Runs by itself the first time a slideshow project is opened, so the builder
   // isn't a blank page. It only fills in HEADERS.
   async function autoOutline() {
@@ -1730,6 +1872,22 @@ function buildSlideMaker(body, p) {
     const r = await post(`/api/projects/${p.id}/outline`, {});
     if (r && r.ok && r.slides && r.slides.length) slides = normalize(r.slides);
     draw();
+  }
+
+  // Speaker notes. These do NOT appear on the slide — they come out in the
+  // notes pane of the .pptx, which is what you read from while presenting.
+  // Kept as one plain string: PowerPoint notes have no formatting worth
+  // keeping, and a string is what the chat edits as the slideN.notes box.
+  function notesBox(slide, index) {
+    const wrap = el('div', 'slide-notes-wrap');
+    wrap.appendChild(el('div', 'slide-notes-label', 'Notes'));
+    const ta = el('textarea', 'slide-notes');
+    ta.placeholder = 'What you want to say for this slide. Only you see these.';
+    ta.dataset.box = `slide${index + 1}.notes`;
+    ta.value = slide.notes || '';
+    ta.oninput = () => { slide.notes = ta.value; save(); };
+    wrap.appendChild(ta);
+    return wrap;
   }
 
   function draw() {
@@ -1741,7 +1899,7 @@ function buildSlideMaker(body, p) {
       top.appendChild(el('span', 'slide-num', isTitle ? 'Title slide' : 'Slide ' + (i + 1)));
       if (!isTitle) {
         const del = el('button', 'btn btn-danger btn-sm', 'Remove');
-        del.onclick = () => { slides.splice(i, 1); if (slides.length === 1) slides.push({ title: '', bullets: [''], photo: false }); save(); draw(); };
+        del.onclick = () => { slides.splice(i, 1); if (slides.length === 1) slides.push({ title: '', bullets: [''], photo: false, notes: '' }); save(); draw(); };
         top.appendChild(del);
       }
       card.appendChild(top);
@@ -1750,6 +1908,7 @@ function buildSlideMaker(body, p) {
       title.type = 'text';
       title.placeholder = isTitle ? 'Name of your presentation' : 'Slide title';
       title.value = slide.title;
+      title.dataset.box = `slide${i + 1}.title`;
       title.oninput = () => { slide.title = title.value; save(); };
       card.appendChild(title);
 
@@ -1761,12 +1920,14 @@ function buildSlideMaker(body, p) {
         sub.value = (slide.bullets || [])[0] || '';
         sub.oninput = () => { slide.bullets = [sub.value]; save(); };
         card.appendChild(sub);
+        card.appendChild(notesBox(slide, i));
         list.appendChild(card);
         return;
       }
 
       const bullets = el('textarea', 'slide-bullets');
       bullets.placeholder = 'One point per line…';
+      bullets.dataset.box = `slide${i + 1}.bullets`;
       bullets.value = (slide.bullets || []).join('\n');
       bullets.oninput = () => { slide.bullets = bullets.value.split('\n'); save(); };
       card.appendChild(bullets);
@@ -1779,11 +1940,12 @@ function buildSlideMaker(body, p) {
       picRow.appendChild(cb);
       picRow.appendChild(el('span', null, 'Leave space for a picture on this slide'));
       card.appendChild(picRow);
+      card.appendChild(notesBox(slide, i));
 
       list.appendChild(card);
     });
     const add = el('button', 'btn btn-ghost', '+ Add slide');
-    add.onclick = () => { slides.push({ title: '', bullets: [''], photo: false }); save(); draw(); };
+    add.onclick = () => { slides.push({ title: '', bullets: [''], photo: false, notes: '' }); save(); draw(); };
     list.appendChild(add);
   }
   // First time on a slideshow project: auto-build the outline. After that,
@@ -3208,6 +3370,8 @@ async function render() {
       // with it: only an assignment page has a chat, so any other view would
       // otherwise render with a gap down its right-hand side.
       if (pageChat) { try { pageChat.abort(); } catch { /* already done */ } pageChat = null; }
+      pageSlides = null;
+      clearLitBoxes();
       setChatLane(false);
       app.innerHTML = '';
       const tabView = TAB_FOR[state.view] || state.view;

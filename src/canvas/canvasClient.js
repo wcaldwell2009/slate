@@ -97,6 +97,13 @@ function realClient() {
     async listQuizzes(courseId) {
       return api(`/courses/${courseId}/quizzes`, { per_page: 100 });
     },
+    // One assignment, fresh. The chat pulls this at the start of a conversation
+    // so it is answering about what Canvas says NOW, not what the last sync
+    // happened to catch — a teacher who edits the instructions in the morning
+    // would otherwise be invisible until the next hourly sync.
+    async getAssignment(courseId, assignmentId) {
+      return api(`/courses/${courseId}/assignments/${assignmentId}`);
+    },
     async listSubmissions(courseId) {
       return api(`/courses/${courseId}/students/submissions`, { student_ids: ['self'], per_page: 100 });
     },

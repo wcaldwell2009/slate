@@ -1,5 +1,84 @@
 # What's been built — plain English
 
+## 2026-08-19 — Ask Claude panel tidied
+
+The two lines of explainer inside the empty chat are gone. An unused panel is
+just empty now — the grey text in the box still says what to type.
+
+## 2026-08-19 — Five fixes to the chat
+
+**It stopped saying it can't see Canvas.** It always had the assignment — it
+just did not know that block came from Canvas. Ask it what the assignment says
+and it now answers straight from it.
+
+**The reply is short again.** It used to list every single change, one line per
+slide. Now it says what happened in a sentence and the change list underneath
+collapses to "Updated notes on slides 1-4." Grammar fixes still show the exact
+before and after, because with those the words *are* the point.
+
+**Notes stopped landing in the bullets.** Asking for "notes for each bullet"
+was putting the notes on the slide, under each bullet. They go in the notes box
+now — the same words, the right box — and the PowerPoint puts them in the notes
+pane where they belong.
+
+**Sources.** When Claude looks something up, its message gets a **Sources** pill.
+Click it and a small panel opens in the chat listing each page it used, which
+slide or box it backs up, and the phrase it supports. Clicking one opens the
+website.
+
+**Hover a source and it lights up the box it belongs to** — the slide bullets or
+notes it came from get a sage outline, and the page scrolls to it. The highlight
+stays on while you read down the list and goes out when you close the panel.
+
+
+## 2026-08-19 — Speaker notes on every slide
+
+Every slide in the builder now has a **Notes** box under it. Type what you
+want to say for that slide — or tell Claude to write it ("write speaker notes
+for slide 2") and it fills that one in and leaves the rest alone.
+
+**They come out in the real PowerPoint notes pane.** Open the .pptx and the
+notes are there under each slide, exactly where PowerPoint puts them, so they
+show on your screen in Presenter View and not on the projector. Slides you
+leave blank get no notes at all rather than an empty notes page.
+
+The HTML version of the slideshow prints them under each slide too.
+
+## 2026-08-19 — Claude shows it is thinking
+
+While Claude is working there is now a small sage star that pulses next to the
+word "Thinking", instead of a line of text that just sat there. The explainer
+line under the **Ask Claude** heading is gone.
+
+
+## 2026-08-19 — Ask Claude on slideshows, and much better formatting
+
+**The chat is on project pages now**, not just assignments — the slideshow
+builder and the essay editor both get the same corner button.
+
+**On a slideshow it can edit one slide at a time.** Each slide has two boxes
+it can name — the header and the bullets — so "put three bullets on slide 3"
+changes slide 3 and nothing else. It can change several boxes in one go if you
+ask for several. Every change is listed underneath its reply, and now the list
+says which slide moved instead of calling everything "your draft".
+
+**Lists come out as real lists.** Before, asking for numbered steps gave you a
+single run-on line with "1." and "2." sitting in the middle of it. Now a
+numbered list is a numbered list, bullets are bullets, and a heading on its own
+line stays on its own line — on screen and in the Word file. Bullets on a slide
+go one per line instead of getting glued onto the end of the last one.
+
+**It checks Canvas when a chat starts.** The first message of a conversation
+pulls the assignment fresh from Canvas — the instructions, the due date, the
+points, and anything the teacher attached — and reads what is inside the files.
+So if a teacher rewrote the instructions this morning, the chat knows. If Canvas
+is down it just carries on with what it had.
+
+**It talks more plainly and does less.** The instructions now tell it to use
+simple everyday words, to do exactly what was asked and nothing more, and when
+it changes something to keep the explanation to a sentence or two rather than
+repeating the whole thing back at you.
+
 ## 2026-08-16 — Fixed: edits were breaking your formatting
 
 If Claude changed a bit of text that had **bold** or *italic* running through
