@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Browser Copilot</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Cpath d='M128 320 A128 128 0 0 1 384 320' fill='none' stroke='%238CA891' stroke-width='52' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <svg class="logo-mark" viewBox="0 0 512 512" aria-hidden="true">
+        <path d="M128 320 A128 128 0 0 1 384 320" fill="none" stroke="#8CA891" stroke-width="52" stroke-linecap="round"/>
+      </svg>
+      Browser Copilot
+    </div>
+    <div class="controls">
+      <div class="view-toggle" role="tablist" aria-label="View">
+        <button id="viewChat" class="active">Chat</button>
+        <button id="viewTab">Tab</button>
+      </div>
+      <label class="tab-label" for="tabSelect">Working on</label>
+      <select id="tabSelect" title="Which browser tab this chat works on"></select>
+      <button id="refreshTabs" class="icon-btn" title="Refresh tab list">↻</button>
+      <button id="launchChrome" class="accent-btn" hidden>Launch Chrome</button>
+      <span id="chromeStatus" class="status-dot off" title="Chrome connection"></span>
+    </div>
+  </header>
+
+  <div id="layout">
+    <aside id="sidebar">
+      <button id="newChatBtn">＋ New chat</button>
+      <div id="chatList"></div>
+    </aside>
+
+    <div id="chatCol">
+      <main id="chatArea">
+        <!-- Live view of the selected tab. Sits over the chat panes; the
+             composer below keeps working, so you can watch and talk at once. -->
+        <div id="tabView" hidden tabindex="0" aria-label="Live view of the selected tab">
+          <button id="newTabBtn" class="new-tab-btn" title="Open a new tab (it lives only in this view)">＋ New tab</button>
+          <img id="tabImg" alt="" hidden draggable="false">
+          <div id="tabHint" class="tab-hint">Pick a tab above to see it here.</div>
+        </div>
+      </main>
+
+      <footer>
+        <div id="busyLine" hidden>
+          <span class="spinner"></span><span id="busyText">Claude is working…</span>
+          <button id="stopBtn" class="ghost-btn small">Stop</button>
+        </div>
+        <div class="composer">
+          <textarea id="input" rows="1" placeholder="Ask Claude to read or fill in the selected tab…"></textarea>
+          <button id="sendBtn" title="Send (Enter)">
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <path d="M2.5 8h10M8.5 3.5 13 8l-4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </div>
+        <div id="metaLine"></div>
+      </footer>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

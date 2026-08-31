@@ -1,0 +1,17 @@
+{
+  "name": "browser-copilot",
+  "version": "1.0.0",
+  "description": "Chat with a headless Claude Code session that can read and fill in your Chrome tabs",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "chrome-remote-interface": "^0.33.2",
+    "express": "^4.21.2",
+    "ws": "^8.18.0",
+    "zod": "^4.0.0"
+  }
+}
