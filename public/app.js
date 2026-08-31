@@ -827,7 +827,14 @@ function fitPages(host) {
   sheet.style.transform = `scale(${scale})`;
   sheet.style.width = PAGE_W + 'px';
   const pages = sheet.children.length || 1;
-  sheet.style.height = (pages * PAGE_H + (pages - 1) * 18) + 'px';
+  const tall = pages * PAGE_H + (pages - 1) * 18;
+  // A transform does not change layout, so the box still occupies its FULL
+  // size and the paper would scroll a long way past the last page into nothing.
+  // Give it the height it actually looks, so the scrollbar matches the pages.
+  sheet.style.height = Math.round(tall * scale) + 'px';
+  // Centre it by hand. `margin: 0 auto` cannot centre a box wider than its
+  // container, which is every case where the scale is below 1.
+  sheet.style.marginLeft = Math.max(0, Math.round((avail - PAGE_W * scale) / 2)) + 'px';
 }
 
 // ---- the slide preview ---------------------------------------------------
@@ -3349,8 +3356,275 @@ const VIEWS = {
   projects: renderProjects, project: renderProjectPage,
   tests: renderTests, test: renderTestPage,
   classes: renderClasses, class: renderClassPage, email: renderEmail,
-  api: renderApi, admin: renderAdmin,
+  api: renderApi, admin: renderAdmin, marks: renderMarks, copilot: renderCopilot,
 };
+
+// ---- Copilot: Browser Copilot, embedded ----------------------------------
+// Browser Copilot is Will's other project — a chat that reads and fills in his
+// Chrome tabs. It stays its own program on its own port; this tab frames it and
+// can start it. Deliberately not wired to anything else in Slate: it knows
+// nothing about assignments or drafts, and Slate knows nothing about its chats.
+async function renderCopilot() {
+  const s = await get('/api/copilot');
+
+  if (s.running) {
+    // Full-bleed: render() put .app-copilot on the container, so the frame has
+    // the whole content column. The copilot brings its own header and layout.
+    const frame = el('iframe', 'copilot-frame');
+    frame.src = s.url;
+    frame.title = 'Browser Copilot';
+    app.appendChild(frame);
+    return;
+  }
+
+  const box = el('div', 'copilot-empty');
+  box.appendChild(el('h1', null, 'Copilot'));
+
+  if (!s.installed) {
+    box.appendChild(emptyState('Browser Copilot is not on this computer',
+      'Slate looked for its folder and could not find it.'));
+    app.appendChild(box);
+    return;
+  }
+
+  box.appendChild(el('p', 'page-sub',
+    'Chat with Claude about whatever is open in Chrome — it can read the page and fill '
+    + 'things in for you, and it leaves the final Submit click to you. It runs as its own '
+    + 'program; start it and it appears right here.'));
+
+  const msg = el('div', 'api-msg');
+  const btn = el('button', 'btn btn-accent', 'Start Browser Copilot');
+  btn.onclick = async () => {
+    const done = markBusy(btn, 'Starting…');
+    let r;
+    try {
+      r = await post('/api/copilot/start');
+    } catch (err) {
+      r = { ok: false, error: String((err && err.message) || err) };
+    } finally {
+      done();
+    }
+    if (r && r.ok) { await render(); return; }
+    msg.className = 'api-msg bad';
+    msg.textContent = (r && r.error) || 'It did not start.';
+  };
+  const acts = el('div', 'api-actions');
+  acts.appendChild(btn);
+  box.appendChild(acts);
+  box.appendChild(msg);
+  app.appendChild(box);
+}
+// ---- Marks: what is hiding in a piece of text -----------------------------
+// Some characters take up no space and never draw anything: zero-width spaces,
+// bidirectional controls, variation selectors, and the Unicode tag block, which
+// shadows printable ASCII and can therefore carry a whole hidden sentence.
+//
+// This page makes them visible. Paste anything in and it shows every one of
+// them, in place, with its real Unicode name — and will strip them back out if
+// you ask it to. Deliberately its own page working on pasted text: it is a
+// bench for looking at how this works, not a step in the hand-in flow.
+const MARK_LABELS = {
+  zwj_family: 'Zero-width',
+  tag_chars: 'Tag characters',
+  bidi: 'Direction controls',
+  variation_selector: 'Variation selectors',
+  private_use: 'Private use',
+  noncharacter: 'Noncharacters',
+  reserved_ignorable: 'Reserved invisible',
+  other_cf: 'Other format controls',
+  confusable: 'Lookalike letters',
+  space: 'Unusual spaces',
+  strip: 'Invisible',
+};
+
+// A spinner, drawn as SVG for the same reason the chat's does it: round 24 took
+// every emoji out of Slate, and a text glyph renders as a grey blob.
+function markSpinner() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 16 16');
+  svg.setAttribute('class', 'marks-spin');
+  svg.setAttribute('aria-hidden', 'true');
+  const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  c.setAttribute('cx', '8'); c.setAttribute('cy', '8'); c.setAttribute('r', '6');
+  c.setAttribute('fill', 'none'); c.setAttribute('stroke', 'currentColor');
+  c.setAttribute('stroke-width', '2'); c.setAttribute('stroke-linecap', 'round');
+  c.setAttribute('stroke-dasharray', '28'); c.setAttribute('stroke-dashoffset', '9');
+  svg.appendChild(c);
+  return svg;
+}
+
+// Put a button into its waiting state and hand back the undo. Scanning a short
+// paste is instant, so this exists for the long ones — and so pressing the
+// button always visibly does something.
+function markBusy(btn, label) {
+  const was = btn.textContent;
+  btn.disabled = true;
+  btn.classList.add('is-busy');
+  btn.textContent = '';
+  btn.appendChild(markSpinner());
+  btn.appendChild(document.createTextNode(' ' + label));
+  return () => { btn.disabled = false; btn.classList.remove('is-busy'); btn.textContent = was; };
+}
+
+function markChip(cat, n) {
+  const chip = el('span', 'mark-chip mark-' + cat);
+  chip.appendChild(el('strong', null, String(n)));
+  chip.appendChild(document.createTextNode(' ' + (MARK_LABELS[cat] || cat)));
+  return chip;
+}
+
+// Rebuild the text with every hidden character replaced by a visible pill, so
+// you can see WHERE they sit rather than just how many there are.
+function markedUp(text, marks) {
+  const host = el('div', 'mark-render');
+  const at = new Map();
+  for (const m of marks) at.set(m.index, m);
+  let buf = '';
+  const flush = () => { if (buf) { host.appendChild(document.createTextNode(buf)); buf = ''; } };
+  let i = 0;
+  for (const ch of text) {
+    const m = at.get(i);
+    if (m) {
+      flush();
+      const pill = el('span', 'mark-pill mark-' + m.category, m.hex.replace('U+', ''));
+      pill.title = m.name + (m.decodes_to ? '  →  "' + m.decodes_to + '"' : '');
+      host.appendChild(pill);
+    } else {
+      buf += ch;
+    }
+    i += ch.length;
+  }
+  flush();
+  if (!host.childNodes.length) host.appendChild(el('span', 'muted', 'Nothing pasted yet.'));
+  return host;
+}
+
+async function renderMarks() {
+  app.appendChild(el('h1', null, 'Watermarks'));
+  app.appendChild(el('p', 'page-sub',
+    'Paste text to see the characters in it that never render — zero-width spaces, '
+    + 'direction controls, variation selectors and tag characters. Ones that are doing a real '
+    + 'job — building an emoji, spelling a flag, joining Persian letters — are left alone. '
+    + 'Nothing here touches your work.'));
+
+  const box = el('textarea', 'marks-input');
+  box.placeholder = 'Paste anything here — a chat reply, something off a website, a bit of your own writing.';
+  box.spellcheck = false;
+  app.appendChild(box);
+
+  const bar = el('div', 'marks-bar');
+  const scanBtn = el('button', 'btn', 'Scan');
+  const cleanBtn = el('button', 'btn btn-ghost', 'Remove them');
+  const copyBtn = el('button', 'btn btn-ghost', 'Copy cleaned text');
+  copyBtn.classList.add('hidden');
+  bar.appendChild(scanBtn); bar.appendChild(cleanBtn); bar.appendChild(copyBtn);
+  app.appendChild(bar);
+
+  const out = el('div', 'marks-out');
+  app.appendChild(out);
+
+  let lastClean = null;
+
+  const show = (res, text, cleaned) => {
+    out.innerHTML = '';
+    lastClean = cleaned || null;
+    copyBtn.classList.toggle('hidden', !cleaned);
+
+    const head = el('div', 'marks-summary');
+    if (res.total === 0) {
+      head.appendChild(el('span', 'marks-none', 'No hidden characters found.'));
+    } else {
+      head.appendChild(el('strong', null, String(res.total)));
+      head.appendChild(document.createTextNode(res.total === 1 ? ' hidden character' : ' hidden characters'));
+      for (const cat of Object.keys(res.counts)) head.appendChild(markChip(cat, res.counts[cat]));
+    }
+    out.appendChild(head);
+
+    if (res.hidden_message) {
+      const hid = el('div', 'marks-hidden');
+      hid.appendChild(el('div', 'section-label', 'Decoded from the tag characters'));
+      hid.appendChild(el('div', 'marks-hidden-text', esc(res.hidden_message)));
+      out.appendChild(hid);
+    }
+
+    if (cleaned != null) {
+      out.appendChild(el('div', 'section-label', 'Cleaned text'));
+      const c = el('div', 'mark-render mark-cleaned');
+      c.textContent = cleaned;
+      out.appendChild(c);
+    }
+
+    out.appendChild(el('div', 'section-label', cleaned != null ? 'Before' : 'Where they are'));
+    out.appendChild(markedUp(text, res.marks));
+
+    if (res.marks.length) {
+      const list = el('div', 'marks-list');
+      for (const m of res.marks.slice(0, 200)) {
+        const row = el('div', 'marks-row');
+        row.appendChild(el('span', 'marks-hex mark-' + m.category, m.hex));
+        row.appendChild(el('span', 'marks-name', m.name));
+        if (m.confidence === 'informational') row.appendChild(el('span', 'marks-soft', 'usually harmless'));
+        if (m.decodes_to) row.appendChild(el('span', 'marks-decode', 'reads as "' + esc(m.decodes_to) + '"'));
+        list.appendChild(row);
+      }
+      if (res.marks.length > 200) list.appendChild(el('div', 'muted', '…and ' + (res.marks.length - 200) + ' more'));
+      out.appendChild(el('div', 'section-label', 'Every one of them'));
+      out.appendChild(list);
+    }
+  };
+
+  // A failed request must SAY so. The first version let the error fall through
+  // the finally, which put the button back and rendered nothing at all — the
+  // page looked like the button did nothing. That happened for real: the server
+  // was still running from before these routes existed, so every scan 404'd.
+  const failed = (err) => {
+    out.innerHTML = '';
+    const box2 = el('div', 'marks-error');
+    box2.appendChild(el('div', null, 'That did not work.'));
+    box2.appendChild(el('div', 'marks-error-why', esc(String((err && err.message) || err))));
+    box2.appendChild(el('div', 'marks-error-why',
+      'If this just started, Slate may need restarting — close it and open it again.'));
+    out.appendChild(box2);
+  };
+
+  // The shared post() does not look at the status, so a 404 comes back as a
+  // JSON parse error, which tells the reader nothing. Check it here instead of
+  // changing post() for the whole app — some endpoints answer 401/403 with a
+  // JSON body their callers read on purpose.
+  const ask = async (url, payload) => {
+    const res = await fetch(url, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (res.status === 404) throw new Error('This version of Slate is still running the old code (404). Restart it.');
+    if (!res.ok) throw new Error('Slate answered ' + res.status + '.');
+    return res.json();
+  };
+
+  scanBtn.onclick = async () => {
+    const done = markBusy(scanBtn, 'Scanning…');
+    try {
+      const r = await ask('/api/marks/scan', { text: box.value });
+      if (!r || typeof r.total !== 'number') throw new Error('Slate did not understand the answer.');
+      show(r, box.value, null);
+    } catch (err) { failed(err); } finally { done(); }
+  };
+  cleanBtn.onclick = async () => {
+    const done = markBusy(cleanBtn, 'Removing…');
+    try {
+      const r = await ask('/api/marks/clean', { text: box.value });
+      if (!r || !r.scan) throw new Error('Slate did not understand the answer.');
+      show(r.scan, box.value, r.text);
+    } catch (err) { failed(err); } finally { done(); }
+  };
+  copyBtn.onclick = async () => {
+    if (lastClean == null) return;
+    try { await navigator.clipboard.writeText(lastClean); copyBtn.textContent = 'Copied'; }
+    catch { copyBtn.textContent = 'Could not copy'; }
+    setTimeout(() => { copyBtn.textContent = 'Copy cleaned text'; }, 1500);
+  };
+}
+
 // Detail pages highlight their parent tab in the sidebar.
 const TAB_FOR = { work: 'today', project: 'projects', test: 'tests', class: 'classes' };
 let rendering = false, pending = false;
@@ -3374,6 +3648,10 @@ async function render() {
       clearLitBoxes();
       setChatLane(false);
       app.innerHTML = '';
+      // The Copilot tab is the one page that fills the whole content column
+      // (it frames another app). Toggled here, not in the view, so leaving the
+      // tab always takes the layout with it — same lesson as setChatLane.
+      app.classList.toggle('app-copilot', state.view === 'copilot');
       const tabView = TAB_FOR[state.view] || state.view;
       document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.view === tabView));
       try { await VIEWS[state.view](); } catch (err) { console.error('render error:', err); }

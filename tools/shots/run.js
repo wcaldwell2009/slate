@@ -26,8 +26,11 @@ const { spawn } = require('child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 const OUT = path.join(ROOT, 'dist', 'shots');
-const WIDTH = 1400;
-const HEIGHT = 1000;
+// Overridable, because a laptop is SHORTER than the desktop this was written
+// on and short viewports are where the hand-in popup breaks. 1400x1000 stays
+// the default so a plain `npm run shots` is unchanged.
+const WIDTH = Number(process.env.SHOTS_WIDTH || 1400);
+const HEIGHT = Number(process.env.SHOTS_HEIGHT || 1000);
 
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -50,7 +53,18 @@ function freePort() {
 // ---- the browser ---------------------------------------------------------
 function findBrowser() {
   const e = process.env;
-  const candidates = [
+  // Slate is developed on Windows and now also runs on a Mac, so this has to
+  // find a browser on both. Absolute paths on darwin/linux, so the `base`
+  // pairs below just use ''.
+  const candidates = process.platform === 'darwin' ? [
+    ['', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'],
+    ['', '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge'],
+    ['', '/Applications/Chromium.app/Contents/MacOS/Chromium'],
+  ] : process.platform === 'linux' ? [
+    ['', '/usr/bin/google-chrome'],
+    ['', '/usr/bin/chromium'],
+    ['', '/usr/bin/chromium-browser'],
+  ] : [
     [e['ProgramFiles(x86)'], 'Microsoft\\Edge\\Application\\msedge.exe'],
     [e.ProgramFiles, 'Microsoft\\Edge\\Application\\msedge.exe'],
     [e.ProgramFiles, 'Google\\Chrome\\Application\\chrome.exe'],
@@ -58,8 +72,8 @@ function findBrowser() {
     [e.LOCALAPPDATA, 'Google\\Chrome\\Application\\chrome.exe'],
   ];
   for (const [base, rel] of candidates) {
-    if (!base) continue;
-    const p = path.join(base, rel);
+    if (base === undefined || base === null) continue;
+    const p = base ? path.join(base, rel) : rel;
     try { if (fs.existsSync(p)) return p; } catch { /* keep looking */ }
   }
   return null;
@@ -272,6 +286,68 @@ const STEPS = [
       + " await new Promise(r=>setTimeout(r,1800)); }",
   },
   {
+    // The hand-in popup with REAL WORK IN IT. The step above opens it on an
+    // empty essay, so it only ever photographed "there is nothing to hand in
+    // yet" and the document preview — the whole point of that screen — was
+    // never in a single shot. That is how a broken preview reached Will.
+    // The draft is written straight into the database because typing 600 words
+    // through the editor here would be slow and flaky.
+    name: 'hand-in-with-draft',
+    arrange: (dbPath) => {
+      const { DatabaseSync } = require('node:sqlite');
+      const fsx = require('fs');
+      const db = new DatabaseSync(dbPath);
+      // EVERY essay, not the first one. The fixture has two, and `setup` below
+      // opens whichever /api/projects lists first — which is not the lowest id.
+      // Filling only one meant the popup opened on the empty one and
+      // photographed "there is nothing to hand in yet" all over again.
+      const rows = db.prepare("SELECT id FROM assignments WHERE build_mode='essay'").all();
+      if (!rows.length) { db.close(); return; }
+      const text = fsx.readFileSync(path.join(ROOT, 'test', 'sample-essay.txt'), 'utf8');
+      const html = text.split(/\n\s*\n/).map((b) => '<p>' + b.replace(/\n/g, ' ')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</p>').join('');
+      for (const row of rows) {
+        db.prepare('UPDATE assignments SET draft_text = ?, draft_html = ?, essay_title = ? WHERE id = ?')
+          .run(text, html, 'The Cost of Convenience', row.id);
+      }
+      db.close();
+    },
+    setup: "const ps=await get('/api/projects');"
+      + "const ds=await Promise.all(ps.map(p=>get('/api/projects/'+p.id)));"
+      + "const e=ds.find(d=>d.build_mode==='essay');"
+      + "if(e){ state.view='project'; state.projectId=e.id; await render();"
+      + " await openDownloadPopup('essay', e.id, null); await new Promise(r=>setTimeout(r,1800)); }",
+  },
+  {
+    // The OTHER hand-in route. Save-to-Desktop and Submit-to-Canvas are two
+    // screens sharing one page preview, and only the first was ever
+    // photographed — so a change to fitPages could break this one silently.
+    // Nothing is sent: the shot stops at the preview, and this server talks to
+    // the recording mock anyway.
+    name: 'submit-preview',
+    arrange: (dbPath) => {
+      const { DatabaseSync } = require('node:sqlite');
+      const fsx = require('fs');
+      const db = new DatabaseSync(dbPath);
+      const rows = db.prepare("SELECT id FROM assignments WHERE build_mode='essay'").all();
+      if (!rows.length) { db.close(); return; }
+      const text = fsx.readFileSync(path.join(ROOT, 'test', 'sample-essay.txt'), 'utf8');
+      const html = text.split(/\n\s*\n/).map((b) => '<p>' + b.replace(/\n/g, ' ')
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</p>').join('');
+      for (const row of rows) {
+        db.prepare('UPDATE assignments SET draft_text = ?, draft_html = ?, essay_title = ? WHERE id = ?')
+          .run(text, html, 'The Cost of Convenience', row.id);
+      }
+      db.close();
+    },
+    setup: "const ps=await get('/api/projects');"
+      + "const ds=await Promise.all(ps.map(p=>get('/api/projects/'+p.id)));"
+      + "const e=ds.find(d=>d.build_mode==='essay');"
+      + "if(e){ state.view='project'; state.projectId=e.id; await render();"
+      + " await openSubmitPreview('essay', e.id, 'My Essay', 'docx', null);"
+      + " await new Promise(r=>setTimeout(r,2200)); }",
+  },
+  {
     name: 'hand-in-popup',
     setup: "const ps=await get('/api/projects');"
       + "const ds=await Promise.all(ps.map(p=>get('/api/projects/'+p.id)));"
@@ -368,6 +444,50 @@ const STEPS = [
       + " await new Promise(r=>setTimeout(r,500)); }",
   },
   { name: 'email', setup: "closePanel(false); state.view='email'; await render();" },
+  {
+    // The Copilot tab. The server here is pointed at a dead port on purpose
+    // (SLATE_COPILOT_URL below), so this deterministically photographs the
+    // "not running yet" screen with the Start button. To look at the framed
+    // copilot itself, run the real one and:
+    //   SHOTS_COPILOT_URL=http://localhost:4321 npm run shots copilot
+    name: 'copilot',
+    setup: "state.view='copilot'; await render(); await new Promise(r=>setTimeout(r,600));",
+  },
+  {
+    // The Marks bench with text pasted in that actually has marks in it,
+    // including a sentence hidden in tag characters — the thing worth seeing.
+    name: 'marks',
+    setup: "state.view='marks'; await render();"
+      + "const hid=[...'SECRET'].map(c=>String.fromCodePoint(0xE0000+c.charCodeAt(0))).join('');"
+      + "const box=document.querySelector('.marks-input');"
+      + "box.value='The American Dream is still achievable,\u200b but it has quietly'"
+      + " +' become a race with staggered\u00a0starting lines.'+hid+'\u202e';"
+      + "document.querySelectorAll('.marks-bar .btn')[0].click();"
+      + "await new Promise(r=>setTimeout(r,1000));",
+  },
+  {
+    // The same text after pressing Remove them — the before/after is the whole
+    // point of the page, and only the "before" half was being photographed.
+    name: 'marks-cleaned',
+    setup: "state.view='marks'; await render();"
+      + "const hid=[...'SECRET'].map(c=>String.fromCodePoint(0xE0000+c.charCodeAt(0))).join('');"
+      + "const box=document.querySelector('.marks-input');"
+      + "box.value='The American Dream is still achievable,\u200b but it has quietly'"
+      + " +' become a race with staggered\u00a0starting lines.'+hid+'\u202e';"
+      + "document.querySelectorAll('.marks-bar .btn')[1].click();"
+      + "await new Promise(r=>setTimeout(r,1000));",
+  },
+  {
+    // The Scan button mid-flight. A real scan returns too fast to photograph by
+    // racing it, so the busy state is applied directly — the point is proving
+    // the spinner renders as SVG and the label changes, not timing the request.
+    name: 'marks-scanning',
+    setup: "state.view='marks'; await render();"
+      + "const box=document.querySelector('.marks-input');"
+      + "box.value='Checking a long piece of writing…';"
+      + "markBusy(document.querySelectorAll('.marks-bar .btn')[0], 'Scanning…');"
+      + "await new Promise(r=>setTimeout(r,400));",
+  },
   { name: 'api-page', setup: "state.view='api'; await render();" },
   { name: 'admin-page', setup: "state.view='admin'; await render();" },
 ];
@@ -382,7 +502,7 @@ const STEPS = [
   }
 
   const browser = findBrowser();
-  if (!browser) { console.error('No Edge or Chrome found.'); process.exit(1); }
+  if (!browser) { console.error('No Edge, Chrome or Chromium found.'); process.exit(1); }
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'slate-shots-'));
   fs.mkdirSync(OUT, { recursive: true });
@@ -401,6 +521,10 @@ const STEPS = [
       SLATE_DB_PATH: path.join(tmp, 'shots.db'),
       SLATE_DATA_DIR: tmp,
       SLATE_DESKTOP_DIR: tmp,
+      // The Copilot tab photographs its "not running" state by default — a
+      // dead port answers the same way every run, where the real copilot may
+      // or may not be up. SHOTS_COPILOT_URL overrides for a live look.
+      SLATE_COPILOT_URL: process.env.SHOTS_COPILOT_URL || 'http://127.0.0.1:1',
     },
     stdio: 'ignore',
   });

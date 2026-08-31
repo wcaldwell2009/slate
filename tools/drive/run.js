@@ -55,6 +55,10 @@ function startServer(port, dir, noAi) {
       SLATE_DATA_DIR: dir,    // notes + downloaded attachments stay in the temp dir
       SLATE_NO_AUTOSYNC: '1', // no background sync moving data under the checks
       SLATE_DESKTOP_DIR: dir,
+      // The Copilot tab must render the same way every sweep, whether or not
+      // the real Browser Copilot happens to be running on this machine.
+      SLATE_COPILOT_DIR: path.join(dir, 'no-copilot-here'),
+      SLATE_COPILOT_URL: 'http://127.0.0.1:1',
       ...(noAi ? { SLATE_NO_AI: '1' } : {}),
     },
     stdio: 'ignore',

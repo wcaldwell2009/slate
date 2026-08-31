@@ -729,8 +729,17 @@ pre.notes-view {
 .panel.handin .ai-check { padding: 8px 11px; margin-top: 8px; }
 .panel.handin .submit-facts { padding: 8px 12px; line-height: 1.55; font-size: 12.5px; }
 
-/* The pages: the only thing on the screen that moves. */
-.handin-paper {
+/* The pages: the only thing on the screen that moves.
+   THREE classes, for the same reason `> .handin-deck` above has three:
+   `.panel.handin > *` sets `flex: none` on every band and, at two classes,
+   outranks a bare `.handin-paper` no matter which comes later in the file.
+   With the paper pinned to `flex: none` it took its full content height — a
+   3-page essay measured 4323px inside a 670px popup — so the file name, the
+   format dropdown and the buttons were pushed past the bottom edge and clipped
+   away by the panel's `overflow: hidden`. It looked like "the preview only
+   shows half the page and the buttons are gone", which is exactly what it was.
+   The empty-draft case has no pages, fits, and hid this for a whole round. */
+.panel.handin > .handin-paper {
   flex: 1 1 auto;
   min-height: 140px;
   overflow-y: auto; overflow-x: hidden;
@@ -739,7 +748,12 @@ pre.notes-view {
   padding: 10px 4px;
   margin-bottom: 10px;
 }
-.pages { transform-origin: top center; margin: 0 auto; }
+/* Scaled from the top LEFT, and centred by a margin fitPages works out.
+   `top center` cannot centre a page that is wider than the band holding it:
+   an 816px page inside a 528px paper resolves `margin: 0 auto` to zero, so the
+   origin sits at the middle of the OVERFLOWING box and the scaled page lands
+   about 150px to the right — clipped off on one side, gap on the other. */
+.pages { transform-origin: top left; margin: 0; }
 .page {
   width: 816px; height: 1056px;      /* 8.5 x 11 inches at 96dpi */
   background: #fff; color: #14181D;
@@ -1067,3 +1081,82 @@ body.chat-open .layout { padding-right: 396px; }
 .hidden { display: none; }
 .mono { font-variant-numeric: tabular-nums; }
 pre.compile { background: var(--surface-2); padding: 16px; border-radius: 10px; white-space: pre-wrap; font-size: 13px; max-height: 320px; overflow: auto; }
+
+/* ---- Marks: the invisible-character bench ---- */
+.marks-input {
+  width: 100%; min-height: 150px; resize: vertical;
+  background: var(--surface); color: var(--text);
+  border: 1px solid rgba(255,255,255,0.10); border-radius: 10px;
+  padding: 12px 14px; font: inherit; font-size: 14px; line-height: 1.6;
+}
+.marks-bar { display: flex; gap: 8px; margin: 10px 0 4px; flex-wrap: wrap; }
+.marks-summary { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 14px 0 4px; font-size: 15px; }
+.marks-none { color: var(--accent); }
+.mark-chip { background: var(--surface-2); border-radius: 999px; padding: 3px 10px; font-size: 12.5px; color: var(--muted); }
+.mark-chip strong { color: var(--text); }
+/* A chip that has been given a category colour needs dark text on it — the
+   inherited muted grey sits at about 2:1 against sage or salmon and is
+   genuinely hard to read. */
+.mark-chip:not(.mark-space) { color: #14181D; }
+.mark-chip:not(.mark-space) strong { color: #14181D; }
+.marks-hidden { background: var(--surface-2); border-radius: 10px; padding: 10px 14px; margin: 10px 0; }
+.marks-hidden-text { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; color: var(--accent); word-break: break-word; }
+/* The text with every hidden character swapped for a visible pill. Keeps the
+   original wrapping so you can see WHERE they sit, not just how many. */
+.mark-render {
+  background: var(--surface-2); border-radius: 10px; padding: 12px 14px;
+  white-space: pre-wrap; word-break: break-word; line-height: 2; font-size: 14px;
+}
+.mark-cleaned { line-height: 1.7; }
+.mark-pill {
+  display: inline-block; font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10.5px; line-height: 1; padding: 3px 5px; border-radius: 4px;
+  vertical-align: middle; margin: 0 1px; color: #14181D; background: var(--accent);
+}
+.mark-zwj_family        { background: #8CA891; }
+.mark-bidi              { background: #C9A227; }
+.mark-tag_chars         { background: #C97A6D; }
+.mark-variation_selector{ background: #7FA8C9; }
+.mark-private_use       { background: #B08CC9; }
+.mark-noncharacter      { background: #C96D8F; }
+.mark-reserved_ignorable{ background: #9C8FA8; }
+.mark-other_cf          { background: #A8A08C; }
+.mark-confusable        { background: #C9946D; }
+.mark-strip             { background: #8CA891; }
+.mark-space             { background: #6B7078; color: var(--text); }
+.marks-list { display: flex; flex-direction: column; gap: 4px; }
+.marks-row { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.marks-hex { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px;
+  padding: 2px 6px; border-radius: 4px; color: #14181D; flex: none; }
+.marks-space.marks-hex { color: var(--text); }
+.marks-name { color: var(--text); }
+.marks-decode { color: var(--accent); }
+.page-sub { color: var(--muted); font-size: 14px; margin: -4px 0 14px; max-width: 70ch; line-height: 1.6; }
+
+/* Waiting state for the Marks buttons. SVG, not a text glyph — round 24 took
+   every emoji out of Slate. */
+.marks-spin { width: 14px; height: 14px; vertical-align: -2px; animation: marks-spin 0.9s linear infinite; }
+.btn.is-busy { display: inline-flex; align-items: center; gap: 7px; opacity: 0.85; }
+.btn.is-busy .marks-spin { flex: none; }
+@keyframes marks-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .marks-spin { animation-duration: 2.4s; }
+}
+.marks-soft { color: var(--muted); font-size: 12px; }
+.marks-hex.mark-space { color: var(--text); }
+
+.marks-error {
+  background: var(--surface-2); border-radius: 10px; padding: 12px 14px;
+  border-left: 3px solid var(--danger); margin-top: 14px; font-size: 14px; line-height: 1.6;
+}
+.marks-error-why { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+/* ---- Copilot tab: Browser Copilot framed inside Slate ---- */
+/* The copilot brings its own header and layout, so the usual page padding and
+   width cap come off while this tab is up — render() toggles .app-copilot on
+   and off so no other view inherits it. */
+.app.app-copilot { max-width: none; padding: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
+.copilot-frame { border: 0; width: 100%; flex: 1; display: block; background: var(--bg); }
+/* The not-running / not-installed states are ordinary pages, so they carry the
+   padding the container gave up. */
+.copilot-empty { padding: 26px 30px; max-width: 980px; }

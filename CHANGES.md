@@ -1,5 +1,116 @@
 # What's been built — plain English
 
+## 2026-08-31 — Invisible Chrome + a New tab button in the viewer
+
+Two things, both your asks:
+
+**Chrome runs invisibly now.** No Chrome window on your screen at all — the
+pages only exist inside the Copilot tab's live view, which you can click and
+type in like the real thing. Same profile as before, so any logins you saved
+carry over. (If some picky website ever fights the invisible browser — extra
+captchas, a login that won't take — the README shows how to launch a visible
+one instead.)
+
+**＋ New tab, right in the viewer.** Top-left of the Tab view. It opens a fresh
+tab (starts on Google), points the view at it, and pins your chat to it. If
+Chrome isn't running yet it quietly starts it first — one click either way.
+
+## 2026-08-31 — See and click the Chrome page inside the Copilot tab
+
+The copilot now has a **Chat | Tab** switcher in its top bar. Chat is what you
+had before. **Tab shows the actual Chrome page, live, right where the chat feed
+was** — you watch it change in real time as Claude fills things in.
+
+And it's not just a picture: **you can click it**. Click buttons and boxes on
+the preview, scroll with your wheel, and type straight into the page (a sage
+outline around the page means your keys are going into it — click the message
+box below to talk to Claude instead). The text box at the bottom works the same
+in both views, so you can tell Claude what to do while watching it happen.
+
+The view follows whatever tab the chat is working on — switch chats or let
+Claude switch tabs and the picture follows.
+
+## 2026-08-31 — Browser Copilot has its own tab
+
+Your Browser Copilot project (the chat that reads and fills in your Chrome
+tabs) now lives inside Slate. There's a new **Copilot** tab in the sidebar,
+under Email.
+
+It's still its own program in its own folder — Slate didn't swallow it. The tab
+shows it in place, and if it isn't running there's a **Start Browser Copilot**
+button that launches it for you. It keeps running even if you close Slate.
+
+It also got rebranded to match: Slate's dark colors, the sage green accent, and
+the Slate arc logo instead of the blue theme it had. That's true whether you
+open it inside Slate or on its own at localhost:4321.
+
+Nothing else is wired up — the copilot can't see your assignments or drafts,
+and Slate can't see its chats. It's the same app, in Slate clothes, one click
+away.
+
+You'll need to quit Slate and start it again once for the new tab to work.
+
+## 2026-08-27 — Marks renamed to Watermarks
+
+The tab and the page heading now say Watermarks.
+
+## 2026-08-27 — Marks now uses the real thing
+
+The Marks page has been rebuilt on the actual code from the watermarks-remover
+project you sent (its Layer A, translated from Python into Slate's own
+JavaScript — it's MIT licensed, so that's allowed, and it's credited in the
+file).
+
+**This fixed a real bug in my first version.** Mine deleted every invisible
+character it found, which sounds right and isn't. Some of those characters are
+doing a job:
+
+An emoji like 👨‍👩‍👧 is three people held together by invisible joiners — strip
+them and you get three separate emoji. A flag like 🏴󠁧󠁢󠁳󠁣󠁴󠁿 is literally spelled
+out in tag characters. Persian and Hindi use an invisible character *as part of
+the spelling*. Arabic text uses direction marks legitimately.
+
+The new version checks what's next to each character before deciding. Loose tag
+characters floating in English text are a hidden message; the same characters
+right after a flag emoji are the flag. It now tells those apart.
+
+It also finds a lot more: private-use characters, Unicode "noncharacters",
+reserved invisible characters, lookalike letters (a Cyrillic "а" pretending to
+be an "a"), and a catch-all for any format character at all.
+
+Direction marks are now reported but **not** removed by default, since they're
+normal in Arabic and Hebrew writing. Only the dangerous kind — the ones that can
+reorder text around them — get stripped.
+
+**Scan and Remove them now show a spinner** while they work, so you can tell
+it's doing something.
+
+## 2026-08-26 — The hand-in screen is fixed
+
+**The buttons are back and the page fits.** Opening "hand it in" on work you
+had actually written showed the top of page one, cut off down the right-hand
+side, with no file name box, no file-type dropdown and no Save or Submit
+buttons underneath. There was no way to hand the work in from that screen.
+
+Two separate faults, both in how the popup was laid out:
+
+The document was taking up its **full** height inside the popup — a three-page
+essay is over 4,000 pixels tall, in a popup about 670 tall — so everything
+below it was pushed off the bottom and hidden. It now takes the room that is
+left over and scrolls inside itself, which is what it was always meant to do.
+
+The page was also being centred wrongly whenever it had to shrink to fit,
+landing about 150 pixels too far right, which is why the words ran off the
+edge. It sits square in the middle now.
+
+**Why nobody spotted it.** The screenshot test opened this screen on an essay
+with nothing written in it, so it only ever photographed "there is nothing to
+hand in yet" — the document preview, the whole point of the screen, was never
+in a single picture. It now gets tested with a real essay in it, and so does
+the Submit-to-Canvas version, which had never been photographed at all.
+
+Checked at every window size from a small laptop screen up to a large monitor.
+
 ## 2026-08-19 — Ask Claude panel tidied
 
 The two lines of explainer inside the empty chat are gone. An unused panel is

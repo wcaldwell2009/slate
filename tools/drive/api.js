@@ -971,6 +971,18 @@ const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
   check('saving a note that does not exist is handled', (await post('/api/notes/999999', { text: 'x' })).body.ok === false);
   check('the image of a deleted note 404s', (await fetch(BASE + `/api/notes/${noteId}/image`)).status === 404);
 
+  // ---- the Copilot tab ---------------------------------------------------
+  // The drive server points SLATE_COPILOT_DIR at a folder that does not exist
+  // and SLATE_COPILOT_URL at a dead port, so these answers are the same every
+  // sweep whether or not the real Browser Copilot is running on this machine.
+  section('Copilot tab');
+  const cop = (await get('/api/copilot')).body;
+  check('status says not installed, not running', cop.installed === false && cop.running === false);
+  check('and still says where it would be', /^http/.test(String(cop.url)));
+  const copStart = (await post('/api/copilot/start')).body;
+  check('start refuses instead of spawning under the harness', copStart.ok === false);
+  check('with a reason a person can read', /not on this computer/.test(String(copStart.error)));
+
   // ---- accounts + admin --------------------------------------------------
   // LAST on purpose. The final checks here switch sign-in on, after which every
   // other endpoint needs a session — so nothing may run after them.

@@ -37,6 +37,10 @@ before(async () => {
       SLATE_DESKTOP_DIR: TMP, // submitted files land here, not the real Desktop
       SLATE_NO_AI: '1',       // notes processing uses the built-in reader in tests
       SLATE_NO_AUTOSYNC: '1', // no background sync moving data under the tests
+      // The Copilot tab must never find (or start) the real Browser Copilot
+      // from inside a test run: point it at an empty folder and a dead port.
+      SLATE_COPILOT_DIR: path.join(TMP, 'no-copilot-here'),
+      SLATE_COPILOT_URL: 'http://127.0.0.1:1',
     },
     stdio: 'ignore',
   });
@@ -2688,4 +2692,167 @@ test('the chat gets the web and nothing else', () => {
   // be that constant and nothing else.
   const passed = [...src.matchAll(/allowedTools:\s*([A-Za-z_'"][^,\n]*)/g)].map((m) => m[1].trim());
   assert.deepEqual(passed, ['CHAT_TOOLS'], 'the only tool list passed is CHAT_TOOLS');
+});
+
+// ---- Marks: the invisible-character bench --------------------------------
+// Ported from watermarks-remover's Layer A (MIT). The tests that matter are the
+// ones asserting real text SURVIVES — a naive stripper passes every "did it
+// find the payload" test while quietly destroying emoji and Persian.
+
+test('marks finds the obvious carriers and labels them', () => {
+  const marks = require('../src/marks');
+  const r = marks.scan('a​b‮c🏿'.replace('🏿', ''));
+  assert.equal(r.counts.zwj_family, 1);
+  assert.equal(r.counts.bidi, 1);
+  assert.equal(r.marks[0].name, 'ZERO WIDTH SPACE');
+  assert.equal(r.marks[0].hex, 'U+200B');
+});
+
+test('marks catches private use, noncharacters and reserved invisibles', () => {
+  const marks = require('../src/marks');
+  assert.equal(marks.scan('ab').counts.private_use, 1);
+  assert.equal(marks.scan('a﷐b').counts.noncharacter, 1);
+  assert.equal(marks.scan('a￰b').counts.reserved_ignorable, 1);
+});
+
+test('an emoji built from zero-width joiners is NOT a payload', () => {
+  const marks = require('../src/marks');
+  // A ZWJ between two emoji bases is building one glyph. Stripping it turns a
+  // family into three separate people, visibly changing the text.
+  const family = '\u{1F468}‍\u{1F469}‍\u{1F467}';
+  assert.equal(marks.scan(family).total, 0);
+  assert.equal(marks.clean(family).text, family);
+  const heart = '❤️‍\u{1F525}';
+  assert.equal(marks.clean(heart).text, heart, 'VS16 after an emoji base is presentation, not a carrier');
+});
+
+test('a zero-width non-joiner inside Persian is orthography', () => {
+  const marks = require('../src/marks');
+  // می‌روم — the ZWNJ is how the word is spelled.
+  const persian = 'می‌روم';
+  assert.equal(marks.scan(persian).total, 0);
+  assert.equal(marks.clean(persian).text, persian);
+});
+
+test('a complete flag sequence survives but loose tag characters do not', () => {
+  const marks = require('../src/marks');
+  // 🏴 + tag letters + terminator is the Scotland flag. The same characters
+  // floating free are a hidden message.
+  const flag = '\u{1F3F4}\u{E0067}\u{E0062}\u{E0073}\u{E0063}\u{E0074}\u{E007F}';
+  assert.equal(marks.clean(flag).removed_count, 0);
+  const loose = 'hello' + [...'HI'].map((c) => String.fromCodePoint(0xE0000 + c.charCodeAt(0))).join('');
+  assert.equal(marks.scan(loose).hidden_message, 'HI');
+  assert.equal(marks.clean(loose).text, 'hello');
+});
+
+test('marks walks by code point, not code unit', () => {
+  const marks = require('../src/marks');
+  // Tag characters are astral; a charCodeAt loop would report surrogate halves.
+  const r = marks.scan('x' + String.fromCodePoint(0xE0041));
+  assert.equal(r.total, 1);
+  assert.equal(r.marks[0].codepoint, 0xE0041);
+  assert.equal(r.marks[0].decodes_to, 'A');
+});
+
+test('direction marks are reported but not removed by default', () => {
+  const marks = require('../src/marks');
+  // An RLM is ordinary in mixed Arabic/English prose, so cleaning leaves it.
+  // An RLO can reorder unrelated text, so it goes.
+  const rlm = 'a‏b';
+  assert.equal(marks.scan(rlm).counts.bidi, 1, 'still reported');
+  assert.equal(marks.clean(rlm).text, rlm, 'but kept');
+  assert.equal(marks.clean('a‮b').text, 'ab', 'an override is removed');
+  assert.equal(marks.clean(rlm, { stripBidi: true }).text, 'ab', 'unless asked');
+});
+
+test('unusual spaces are replaced, never deleted', () => {
+  const marks = require('../src/marks');
+  // Deleting the space between two words joins them together.
+  assert.equal(marks.clean('a b').text, 'a b');
+  assert.equal(marks.clean('a b', { normalizeSpaces: false }).text, 'a b');
+  assert.equal(marks.scan('a b').marks[0].confidence, 'informational');
+});
+
+test('cleaning ordinary writing changes nothing, and is idempotent', () => {
+  const marks = require('../src/marks');
+  const plain = 'Ordinary writing, with punctuation — and a dash. Numbers: 1, 2, 3.';
+  assert.equal(marks.clean(plain).text, plain);
+  assert.equal(marks.scan(plain).total, 0);
+  const once = marks.clean('x​‪y').text;
+  assert.equal(marks.clean(once).text, once);
+});
+
+test('the marks bench never touches an assignment', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'marks.js'), 'utf8');
+  // It is a bench for pasted text, deliberately not a step in the hand-in flow,
+  // and it takes no dependencies. If it ever learns to read or write a draft,
+  // that should be a decision somebody makes on purpose.
+  for (const forbidden of ['require(', 'draft', 'assignments', 'db.']) {
+    assert.ok(!src.includes(forbidden), `marks.js must not mention ${forbidden}`);
+  }
+});
+
+test('the statistical rewrite layer was deliberately not ported', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'marks.js'), 'utf8');
+  // Layer A (invisible characters) is hygiene. Layer B rewords prose to break
+  // token-sampling watermarks, which is a rewriting pass over graded work.
+  // If this file ever grows one, it should not happen quietly.
+  for (const forbidden of ['rewrite', 'paraphrase', 'synthid', 'perplexity', 'stylometry']) {
+    assert.ok(!src.toLowerCase().includes(forbidden), `marks.js must not do ${forbidden}`);
+  }
+});
+
+// ---- Browser Copilot tab (round 58) ----------------------------------------
+// Browser Copilot is its own app in its own folder; Slate only frames it.
+// These pin the seams: the status endpoint answers honestly, nothing can spawn
+// while a harness runs, and the module stays a bystander to Slate's data.
+
+test('copilot: status reports a missing install and a dead port honestly', async () => {
+  const s = await get('/api/copilot');
+  assert.equal(s.installed, false, 'the test server points at an empty folder');
+  assert.equal(s.running, false, 'and at a dead port');
+  assert.ok(String(s.url).startsWith('http'), 'still says where it would be');
+});
+
+test('copilot: start on the test server refuses instead of spawning', async () => {
+  const r = await post('/api/copilot/start');
+  assert.equal(r.ok, false);
+  assert.match(String(r.error), /not on this computer/);
+});
+
+test('copilot: SLATE_OPEN=0 blocks the spawn even when installed', async () => {
+  // The harnesses click every button they can find; a Start button that really
+  // launched another program under them would be the round 55 pkill story in
+  // reverse. Same switch openOnComputer honors.
+  const copilotTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'slate-copilot-'));
+  fs.writeFileSync(path.join(copilotTmp, 'server.js'), '// stand-in\n');
+  const saved = {};
+  for (const k of ['SLATE_COPILOT_DIR', 'SLATE_COPILOT_URL', 'SLATE_OPEN']) saved[k] = process.env[k];
+  process.env.SLATE_COPILOT_DIR = copilotTmp;
+  process.env.SLATE_COPILOT_URL = 'http://127.0.0.1:1';
+  process.env.SLATE_OPEN = '0';
+  try {
+    const copilot = require('../src/copilot');
+    assert.equal(copilot.isInstalled(), true, 'the stand-in folder counts as installed');
+    const r = await copilot.start();
+    assert.equal(r.ok, false);
+    assert.match(String(r.error), /switched off/);
+  } finally {
+    for (const k of Object.keys(saved)) {
+      if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k];
+    }
+    fs.rmSync(copilotTmp, { recursive: true, force: true });
+  }
+});
+
+test('the copilot module stays a bystander to Slate', () => {
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'copilot.js'), 'utf8');
+  // It frames another app; it must never grow into Slate's data. If it ever
+  // needs the database or a student's writing, that should be a decision
+  // somebody makes on purpose, not a drift.
+  for (const forbidden of ["require('./db')", 'draft', 'assignments', 'getDb']) {
+    assert.ok(!src.includes(forbidden), `copilot.js must not mention ${forbidden}`);
+  }
 });

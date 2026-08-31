@@ -326,6 +326,35 @@ async function handleApi(req, res, pathname, query) {
     }
 
     // Canvas connection (the API page)
+    // The Marks bench. Stateless: text in, findings out, nothing is stored and
+    // nothing here reads or writes an assignment.
+    if (pathname === '/api/marks/scan' && method === 'POST') {
+      return sendJson(res, 200, require('./src/marks').scan(body.text));
+    }
+    if (pathname === '/api/marks/clean' && method === 'POST') {
+      const marks = require('./src/marks');
+      // Pass the real option shape through. An older version took a
+      // `categories` list, which the ported cleaner does not have — it was
+      // being silently ignored.
+      const cleaned = marks.clean(body.text, {
+        normalizeSpaces: body.normalize_spaces !== false,
+        stripBidi: !!body.strip_bidi,
+        stripGlue: !!body.strip_glue,
+        aggressive: !!body.aggressive,
+        nfkc: !!body.nfkc,
+      });
+      return sendJson(res, 200, { ...cleaned, scan: marks.scan(body.text, { aggressive: !!body.aggressive }) });
+    }
+    // Browser Copilot — Will's other project, embedded on its own tab. Slate
+    // only asks whether it is up and starts it; the copilot has its own server
+    // and no access to anything in here.
+    if (pathname === '/api/copilot' && method === 'GET') {
+      return sendJson(res, 200, await require('./src/copilot').status());
+    }
+    if (pathname === '/api/copilot/start' && method === 'POST') {
+      const r = await require('./src/copilot').start();
+      return sendJson(res, 200, r);
+    }
     if (pathname === '/api/canvas' && method === 'GET') return sendJson(res, 200, api.canvasSettings());
     if (pathname === '/api/canvas' && method === 'POST') {
       return sendJson(res, 200, await api.connectCanvas(body));

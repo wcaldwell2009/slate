@@ -150,7 +150,7 @@ document._byId['build-tag'] = new Node('span');
 document._byId['build-tag'].classList.add('hidden');
 document._byId.who = new Node('span');
 document._byId.who.classList.add('hidden');
-document._tabs = ['today', 'week', 'projects', 'tests', 'classes', 'email', 'api', 'admin'].map((v) => {
+document._tabs = ['today', 'week', 'projects', 'tests', 'classes', 'email', 'copilot', 'api', 'admin'].map((v) => {
   const n = new Node('button');
   n.classList.add('tab');
   n.dataset.view = v;
@@ -209,7 +209,7 @@ async function renderView(view, extra = '') {
   check('render is a function', run('typeof render') === 'function');
 
   // -------------------------------------------------------------- each view
-  for (const view of ['today', 'week', 'projects', 'tests', 'classes', 'email']) {
+  for (const view of ['today', 'week', 'projects', 'tests', 'classes', 'email', 'copilot']) {
     section('View: ' + view);
     const errBefore = errors.length;
     await renderView(view);
@@ -1063,7 +1063,7 @@ async function renderView(view, extra = '') {
   // The work page is in here because the chat launcher wanted a speech-bubble
   // emoji and got a drawn one instead — a rule the list views alone would not
   // have caught.
-  for (const view of ['today', 'week', 'projects', 'tests', 'classes', 'email', 'work']) {
+  for (const view of ['today', 'week', 'projects', 'tests', 'classes', 'email', 'copilot', 'work']) {
     await renderView(view, view === 'work' ? `state.workId = ${textA.id};` : '');
     const bars = nodesIn(appNode()).filter((n) => n._classes().includes('bar') || n.htmlClasses.includes('bar'));
     check(`${view} has no progress bar`, bars.length === 0, String(bars.length));

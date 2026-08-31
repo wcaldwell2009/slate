@@ -1,7 +1,7 @@
 # Slate — School Tracker App — Project Handoff
 
 ## Last Updated
-2026-08-19 (round 54 — sources, short receipts, Canvas wording)
+2026-08-31 (round 60 — invisible Chrome + New tab in the viewer)
 
 ## What this project is
 Slate is a **local desktop app** that helps Will keep on top of school work. It
@@ -228,6 +228,268 @@ in the prompt as the student's work to critique, never to improve.
 Node (here, inserting a conversation straight into the shots database) before
 the page is photographed, because that server runs with `SLATE_NO_AI=1` and
 cannot have a conversation of its own.
+
+**Round 60 — invisible Chrome + New tab in the viewer (2026-08-31).**
+
+Will asked whether a new tab could exist "only in the Slate tab", was told the
+page must run in real Chrome somewhere but the WINDOW can go, and **chose
+invisible**: `launchChrome` now passes `--headless=new` (same profile, logins
+persist — comment in chrome.js explains the escape hatch: launch by hand
+without the flag for a site that fights a windowless browser, README updated
+to match). His visible copilot Chrome was killed by PID and relaunched
+headless through the API path. **`Page.startScreencast`, input injection and
+the whole viewer verified against the headless Chrome** — identical behavior.
+
+**`＋ New tab` lives inside the Tab view** (top-left, own `new-tab-btn` class).
+`chrome.openTab()` uses a raw `PUT /json/new` — Chrome 136+ refuses GET there,
+and chrome-remote-interface's helper is not trusted with that; the copilot's
+own `POST /api/new-tab` wraps it. The button self-heals: if new-tab fails it
+POSTs `/api/launch-chrome` (now headless) and retries, so from a cold start
+one click gets a working tab. On success it `loadTabs(id)` + sets the dropdown
++ calls `tabSelect.onchange()`, which pins the chat and points the stream.
+
+**Round 59 — the copilot's live, clickable tab view (2026-08-31).**
+
+All in the copilot's own folder; Slate untouched this round. A **Chat | Tab**
+toggle in the copilot header swaps the chat feed for a LIVE view of the
+selected Chrome tab, streamed over the existing `/ws` socket as CDP screencast
+frames (`Page.startScreencast`, JPEG q70, ≤1600px). The composer keeps working
+under it — Will can watch the page while telling Claude what to do.
+
+**The preview is clickable, not a picture.** Mouse events on the scaled image
+are mapped to page CSS pixels using the frame metadata's `deviceWidth/Height`
+and forwarded as `Input.dispatchMouseEvent`; printable keys go via
+`Input.insertText`, named keys (Enter, Backspace, arrows…) via
+`dispatchKeyEvent` with real virtual key codes. Keys go to the page only while
+the viewer is FOCUSED (sage ring says so); cmd/ctrl combos are never forwarded.
+
+**One screencast frame handler per CDP client (`__castSubs` set), never one
+per watcher** — every handler must ack (`screencastFrameAck`, Chrome stops
+after ~2 unacked) and a second handler double-acks the same sessionId.
+`watchTab` calls `bringToFront` first: a background tab never repaints, so it
+never sends a frame.
+
+**`syncWatch()` is called from every place the answer changes** — mode toggle,
+`activateChat`, the tab dropdown, Claude's own `tab_switched`, and reconnect
+('connected' handler; `watching` resets in onclose because the server-side
+stream died with the socket). Frames carry no chatId and are handled before
+the per-chat dispatch in `handleEvent`.
+
+Verified end-to-end with a driven test tab inside the copilot's Chrome:
+frames arrive with viewport metadata, a click through the viewer path focuses
+the page's input, typed chars + Backspace land ("hey wil"), and a page change
+produces a fresh frame. Screenshotted both views headless. The dropdown label
+became "Working on" — the toggle took the word "Tab".
+
+**Round 58 — Browser Copilot embedded on its own tab (2026-08-31).**
+
+Will asked for his Browser Copilot project (`~/Desktop/Browser Copilot/
+browser-copilot` — a chat UI driving a headless Agent SDK session with Chrome
+CDP tools: read_page / fill_many / click_element etc.) to get a tab in Slate,
+rebranded to match.
+
+**IT STAYS ITS OWN APP, AND THAT IS THE DESIGN.** The copilot has real npm
+dependencies (express, ws, chrome-remote-interface, zod, the Agent SDK);
+absorbing it would end Slate's zero-dependency rule for no gain. The Copilot
+tab is an iframe onto `http://localhost:4321`. `src/copilot.js` only knows how
+to find the folder, probe `/api/status`, and spawn `node server.js` (with
+Slate's own `process.execPath` — node isn't on every launcher's PATH). A smoke
+test greps copilot.js the way marks.js is grepped: **no `require('./db')`, no
+`draft`, no `assignments`, no `getDb`.** It frames another app; if it ever
+grows into Slate's data, that's a decision somebody makes on purpose.
+
+**Not wired to schoolwork on purpose.** No draft access, no assignment context,
+nothing passes between the two apps. The copilot's own prompt fills fields but
+leaves Submit/Send clicks to the user. Worth remembering: it can drive any tab
+in its Chrome profile — that is its entire job — so "wire it to Canvas" or
+"give it my draft" would be the round 56 hand-in-flow conversation again.
+
+**`SLATE_OPEN=0` blocks the spawn** — the harnesses click every button they
+find, and a Start button that really launched another program under a sweep is
+the round 55 pkill story in reverse. Same switch openOnComputer honors; pinned
+by a smoke test. All three harnesses also pin `SLATE_COPILOT_DIR` at a missing
+folder and `SLATE_COPILOT_URL` at a dead port (`http://127.0.0.1:1`), so the
+tab renders the same state every run whether or not the real copilot is up.
+The shots harness takes `SHOTS_COPILOT_URL=http://localhost:4321 npm run shots
+copilot` for a live look at the framed app.
+
+**`.app-copilot` (full-bleed, no padding, no width cap) is toggled in
+`render()`, not in the view** — `app.classList.toggle('app-copilot',
+state.view==='copilot')` right after the teardown — so leaving the tab always
+takes the layout with it. Same lesson as setChatLane. The not-running /
+not-installed states carry their own padding via `.copilot-empty` (own `copilot-`
+prefix — round 45's class-collision rule).
+
+**The rebrand lives in the copilot's folder**, not Slate's: `public/style.css`
+(Slate palette — #14181D / #1F252C / #8CA891 sage, dark text on accent
+buttons), `public/index.html` (Slate arc mark as inline SVG + favicon; the ➤
+send glyph became an SVG arrow — round 24, no emoji, and a dingbat on a sage
+button is exactly the grey-blob case). The copilot serves static files per
+request, so a reload picks the reskin up; no copilot restart needed.
+
+**The running Slate on 4173 predates the `/api/copilot` routes** — the tab
+appears (no-store means fresh app.js) but 404s until Slate is restarted. The
+404 comes back as `{error:'not found'}`, which renderCopilot reads as
+not-installed — wrong message, known, goes away on restart.
+
+**Round 57 — Marks rebuilt on the upstream code (2026-08-27).**
+
+**The tab and heading say "Watermarks"; everything underneath is still
+`marks`** — `state.view='marks'`, `src/marks.js`, `/api/marks/*`, the `mark-*`
+CSS classes and the `marks*` shot names. Renamed the label only, on purpose:
+the internal name is load-bearing in five places and renaming it buys nothing.
+
+Will asked for the repo's actual code to be used. `src/marks.js` is now a port
+of **watermarks-remover `service/scripts/text_unicode.py`** (MIT, Guillaume
+Meyer and contributors), credited at the top of the file. Translated rather
+than wrapped: Slate takes no dependencies and ships no Python. Python's
+`unicodedata` becomes Unicode property escapes (`\p{Cf}`, `\p{L}`, `\p{M}`),
+which V8 has natively, and NFKC becomes `String.prototype.normalize`.
+
+**ONLY LAYER A WAS PORTED, AND A TEST ENFORCES THAT.** The upstream statistical
+layer rewords prose to break token-sampling watermarks; that stays declined
+(round 56). A smoke test greps `marks.js` for `rewrite`/`paraphrase`/`synthid`/
+`perplexity`/`stylometry` and fails if any appear, alongside the existing test
+that it cannot mention `require(`, `draft`, `assignments` or `db.`.
+
+**THE BUG THE PORT FIXED, AND IT IS THE WHOLE POINT OF THE UPSTREAM CODE:** my
+first version deleted every invisible character it found. That destroys real
+text. A ZWJ between two emoji bases builds one glyph (👨‍👩‍👧 becomes three
+people); ZWNJ is ORTHOGRAPHY in Persian and Devanagari (می‌روم); a subdivision
+flag IS a run of tag characters after 🏴; variation selectors pick CJK glyph
+forms; and bidi marks/isolates are ordinary in mixed RTL prose. **Whether an
+invisible character is a payload or part of the writing depends entirely on
+what sits next to it** — `decide()` is that context test and it is why this
+file is not a regex. The tests that matter are the ones asserting real text
+SURVIVES; a naive stripper passes every "did it find the payload" test.
+
+Also gained from upstream: private-use planes, the 66 noncharacters, reserved
+default-ignorables (as explicit ranges — **never a "category is Cn" rule**,
+which would eat newly assigned characters), Hangul fillers, Khmer inherent
+vowels, Mongolian FVS, `206A`–`206F`, interlinear annotation, Latin confusables
+(off by default — a Russian word is not a watermark), and a `\p{Cf}` catch-all.
+
+**Bidi is reported but NOT stripped by default.** Preservable marks/isolates and
+correctly paired LRE/RLE…PDF survive; overrides (`202D`/`202E`) and unpaired
+embeddings do not. `scan()` runs with `stripBidi: true` so the inspector still
+shows them; `clean()` does not. Unusual spaces are REPLACED with U+0020, never
+deleted — deleting the space between two words joins them.
+
+**`markBusy()` in app.js** is the waiting state Will asked for: SVG spinner
+(round 24 took every emoji out), label swap, button disabled, restored in a
+`finally`. Honours `prefers-reduced-motion`. Photographed by the
+`marks-scanning` shot, which applies the busy state directly — a real scan
+returns far too fast to catch by racing it.
+
+**Round 56 — Marks, and where the line was drawn (2026-08-26).**
+
+Will brought `github.com/guillaumemeyer/watermarks-remover` and asked for it to
+be applied to **all** the chat's outputs. That repo strips AI provenance marks
+in three layers: invisible Unicode, a statistical rewrite pass, and
+C2PA/EXIF/XMP from files.
+
+**What was declined and what was built, and the reasoning, because this will
+come back.** Auto-applying it to every chat reply on its way into his drafts
+was declined — that is the evasion pass his own spec forbids, and since round
+51c the chat can write straight into the draft, so it would have completed a
+ghostwrite-then-launder path. **The statistical layer stays declined**: it works
+by having a model reword his prose until the token signal breaks, which is a
+rewriting pass over graded work whose only purpose is defeating detection.
+
+**What WAS built is the inspector, plus a manual strip of invisible characters
+on pasted text.** He argued that a detector with no remover teaches half the
+mechanism, and he was right. Stripping zero-width characters is a one-line
+regex and ordinary text hygiene — refusing to write `.replace()` on a character
+class would have been theatre, not a safeguard. The distinction that actually
+holds is **hygiene on pasted text vs. a rewriting pass on submitted work**, not
+"remove" vs. "detect".
+
+**The design condition is load-bearing: it is its OWN PAGE, on pasted text.**
+Not a button on the draft, not attached to a chat reply. `src/marks.js` requires
+nothing, touches no database, and knows nothing about assignments — **a test
+greps it for `require(`, `draft`, `assignments` and `db` and fails if any
+appear.** If it ever grows into the hand-in flow, that should be a decision
+somebody makes on purpose, not a drift.
+
+**`scan()` walks by CODE POINT, not code unit.** The tag block (U+E0000–E007F)
+and the variation supplement are astral; a `charCodeAt` loop splits them into
+surrogate halves and reports two wrong things instead of one right one. Tag
+characters shadow printable ASCII one-to-one, so `hidden_message` reassembles
+what they spell — that is the single most convincing thing on the page.
+
+**`clean()` leaves the `space` category out of its defaults**, and converts
+exotic spaces to a plain space rather than deleting them when asked: a no-break
+space is usually deliberate, and deleting the space between two words joins
+them.
+
+**`el(tag, cls, html)` SETS innerHTML.** Both places where decoded text reached
+it — `hidden_message` and `decodes_to` — were an XSS hole on a page whose entire
+purpose is pasting untrusted text, and a tag payload decodes to arbitrary
+printable ASCII including `<`. Both now go through `esc()`. **Anything rendered
+on this page must be escaped or set with `textContent`.**
+
+Shots: `marks` and `marks-cleaned` (the before/after is the point, so both
+states are photographed).
+
+**Round 55 — the hand-in screen was unusable, and Slate is on a Mac now
+(2026-08-26).**
+
+**THE BUG: `.panel.handin > * { flex: none; }` OUTRANKS `.handin-paper`.**
+Two classes beats one, whatever the source order, so the paper band was pinned
+to `flex: none` and took its FULL content height — a 3-page essay measured
+4323px inside a 670px popup. `.handin-settings` (file name, format dropdown,
+Save / Submit) started at y=4401 and was clipped away by the panel's
+`overflow: hidden`. There was no way to hand work in. Fixed by giving it three
+classes, `.panel.handin > .handin-paper`, exactly the way round 45 already had
+to do it for `> .handin-deck` — the comment there even says why, and the
+document path never got the same treatment. **This is the fourth class
+collision in this project** (round 31 `.dl-type`, round 45 `pv-`, round 45
+`.handin-deck`). A rule like `> *` inside a component is a specificity trap for
+every single-class child under it.
+
+**Second, `transform-origin: top center` cannot centre a page wider than its
+band.** `.pages` is 816px in a 528px paper, so `margin: 0 auto` resolves to
+zero, the origin lands at the middle of the OVERFLOWING box, and the scaled
+page sits ~150px right — clipped on one side, gapped on the other. Now
+`top left` plus a `marginLeft` that `fitPages` works out. `fitPages` also sets
+the sheet's height to the SCALED height: a transform does not change layout, so
+the paper was scrolling thousands of pixels past the last page into nothing.
+
+**WHY EVERY CHECK PASSED FOR A WHOLE ROUND.** The `hand-in-popup` shot opens
+the popup on an essay with an EMPTY draft, so it photographed "There is nothing
+to hand in yet" — no pages, nothing to overflow, screen looks fine. The
+document preview, which is the entire point of that screen, was never in a
+single picture. **A screen must be photographed in the state it is actually
+used in.** New `hand-in-with-draft` step fills the sample essay in through
+`arrange` and opens it; new `submit-preview` step covers the Submit-to-Canvas
+half, which had never been photographed at all despite sharing `fitPages`.
+Both essays in the fixture get the draft — `arrange` filled only the lowest id
+while `setup` opens whichever `/api/projects` returns first, which is a
+different row, and the first attempt photographed the empty state again.
+
+**`tools/shots/run.js` runs on macOS now** (`findBrowser` has darwin/linux
+branches; Chrome at `/Applications/Google Chrome.app/...`) and the viewport is
+settable with `SHOTS_WIDTH` / `SHOTS_HEIGHT`, default still 1400x1000.
+**The default is TALLER than a laptop** — Will's MacBook Air is 1470x956
+points, so a real browser viewport is ~713px. Everything had only ever been
+looked at with 287px more headroom than he has. Verified fixed from a 640px
+window upward.
+
+**SLATE NOW RUNS ON WILL'S MAC** — `~/Desktop/School Tracker`, a clone of the
+GitHub repo. **He connected his real Canvas to it on 2026-08-26, so
+`data/slate.db` here holds a REAL token and his real schoolwork, and the
+"never write to Will's live data" rule at the top of this file applies to this
+machine too.** Node 24 is installed at `~/.local/lib/nodejs` (no Homebrew — he
+is NOT an administrator on this Mac, the admin is `johncaldwell`, so nothing
+needing sudo can be installed). The installer half of the project
+(`install.ps1`, `Install Slate.bat`, `push.js`, `icon.js`) is Windows-only and
+cannot run here; `npm test`, `npm run drive` and `npm run shots` all work.
+**There are two independent Slates now, one per machine** — same Canvas, but
+drafts do not travel between them.
+
+**Harness trap, cost Will's running app:** `pkill -f server.js` killed the
+Slate he had open on 4173. Kill a throwaway server by its PID, never by a
+pattern that also matches the real one.
 
 **Round 54 — five things Will reported (2026-08-19).**
 
@@ -1795,6 +2057,50 @@ Open, all offered and none refused — just not answered yet:
 - Will's instruction in a message IS approval.
 
 ## Activity Log
+- **2026-08-31 (round 60)** — The copilot's Chrome runs invisibly now (Will's
+  choice, offered both ways): no window anywhere, the clickable live view in
+  Slate is the only place its tabs exist, same profile so logins persist. A
+  ＋ New tab button in the viewer opens a tab, shows it, and pins the chat to
+  it — starting Chrome itself first if needed. Streaming and clicking
+  re-verified against the windowless Chrome.
+- **2026-08-31 (round 59)** — The copilot got a Chat | Tab switcher: Tab shows
+  the Chrome page live where the chat feed was, and it's clickable — clicks,
+  scrolling and typing pass through to the real page, and the view follows
+  whichever tab the chat (or Claude) moves to. All inside the copilot project;
+  Slate itself untouched. Verified end-to-end against a driven test tab.
+- **2026-08-31 (round 58)** — Browser Copilot got its own tab in Slate: the
+  sidebar gained Copilot, which frames the copilot app in place and can start
+  it with one button. Rebranded the copilot itself into Slate's colors and
+  mark. It stays a separate program — Slate keeps zero dependencies, and the
+  two share no data by design (guard test enforces it). 902 checks + 108 tests
+  + 32 screens; 5 guard tests still red by design.
+- **2026-08-27 (round 57)** — Rebuilt Marks on the actual upstream code (Layer A
+  of watermarks-remover, MIT, ported to dependency-free JavaScript). That fixed
+  a real bug in the first version, which deleted every invisible character and
+  would have destroyed emoji, flags and Persian spelling — the upstream code's
+  whole substance is deciding by context, and now Slate does too. Added the
+  spinner Will asked for on Scan and Remove. The statistical rewrite layer stays
+  unported, now pinned by a test. 890 checks + 104 tests + 31 screens;
+  5 guard tests still red by design.
+- **2026-08-26 (round 56)** — Added a Marks page: paste text and see every
+  character in it that never renders, including whole sentences hidden in
+  Unicode tag characters, with a button to strip them and a before/after.
+  Declined wiring the watermark remover into the chat's output path and
+  declined its statistical rewrite layer; built the inspector and the manual
+  clean instead, on its own page, deliberately unable to touch a draft. Caught
+  an XSS hole in it before it shipped. 890 checks + 99 tests + 30 screens;
+  5 guard tests still red by design.
+- **2026-08-26 (round 55)** — Fixed the hand-in screen, which showed half a
+  cut-off page and no buttons at all, so work could not be handed in from it.
+  Two layout faults: the document was taking its full height and shoving
+  everything below it out of the popup, and a shrunk page was being centred
+  about 150px off. Found the reason no check caught it — the screenshot test
+  opened that screen on an empty essay and had never once photographed a real
+  document. Added a shot with actual work in it, plus one for the
+  Submit-to-Canvas half that had never been photographed, and taught the
+  harness to run on macOS at a settable window size. Also got Slate running on
+  Will's Mac. 890 checks + 93 tests + 28 screens; 5 guard tests still red by
+  design.
 - **2026-08-19 (round 54)** — Fixed the chat claiming it could not see Canvas,
   cut the reply and the change list down to a sentence each, stopped speaker
   notes being written into the bullets, and added a sources panel: click to see
