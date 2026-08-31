@@ -641,6 +641,15 @@ has is worse than one that claims nothing.**
 Prompt additions Will asked for: simple everyday words, do only what was asked,
 and after an edit keep the reply to a sentence or two rather than repeating the
 new text (the receipt already lists every change). Pinned by drive checks.
+**Round 60 addendum (2026-08-31): two repos now, and the Mac pushes fine.**
+Browser Copilot has its own PRIVATE repo, `wcaldwell2009/browser-copilot`
+(created via the GitHub API with the keychain credential — `gh` is not
+installed on the Mac and can't be without admin). Plain `git push` works on
+the Mac through the osxkeychain credential; `user.name`/`user.email` are now
+set globally (Will Caldwell / wcaldwell2009@gmail.com). Its `.gitignore`
+keeps out `node_modules/` and `.claude/`. The Windows `gh.exe` note below is
+Windows-only.
+
 ## GitHub — the project is a git repo now (round 50, 2026-08-15)
 **`https://github.com/wcaldwell2009/slate`, PRIVATE.** The workshop folder is
 the repo; `main` is the branch. Auth is the GitHub CLI (`gh`, installed via
