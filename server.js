@@ -223,6 +223,7 @@ wss.on('connection', (ws) => {
         }
       }
       chats.appendMessage(chatId, 'you', msg.text.trim());
+      chats.setTabId(chatId, msg.tabId || null);
       session.sendMessage(text, msg.tabId || null, tabLabel, snapshot, attachments);
     } else if (msg.type === 'interrupt') {
       const stopped = sessions.get(chatId);
@@ -232,6 +233,7 @@ wss.on('connection', (ws) => {
     } else if (msg.type === 'select_tab') {
       const session = sessions.get(chatId);
       if (session) session.currentTabId = msg.tabId || null;
+      chats.setTabId(chatId, msg.tabId || null);
     } else if (msg.type === 'close_chat') {
       sessions.get(chatId)?.dispose();
       sessions.delete(chatId);

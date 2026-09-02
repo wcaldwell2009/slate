@@ -206,6 +206,9 @@ function syncViewToDropdown() {
 
 function setMode(mode) {
   viewMode = mode;
+  // Remembered per browser, so clicking away from the Copilot tab in Slate
+  // and back lands on the same view.
+  try { localStorage.setItem('copilotView', mode); } catch { /* private mode */ }
   $('viewChat').classList.toggle('active', mode === 'chat');
   $('viewTab').classList.toggle('active', mode === 'tab');
   $('viewDocs').classList.toggle('active', mode === 'docs');
@@ -465,6 +468,7 @@ function createChat() {
 function restoreChat(stored) {
   const chat = new Chat(stored.id);
   chats.set(chat.id, chat);
+  chat.tabId = stored.tabId || null; // back onto the browser tab it was on
   if (stored.title) chat.setTitle(stored.title);
   if (stored.messages && stored.messages.length) {
     chat.welcome?.remove();
@@ -483,6 +487,7 @@ function restoreChat(stored) {
 
 function activateChat(id) {
   activeId = id;
+  try { localStorage.setItem('copilotActiveChat', id); } catch { /* private mode */ }
   for (const c of chats.values()) {
     c.pane.hidden = c.id !== id;
     c.item.classList.toggle('active', c.id === id);
@@ -788,20 +793,33 @@ window.addEventListener('focus', async () => {
 /* ================= init ================= */
 (async () => {
   connect();
+  // Tabs first, so restored chats can point the dropdown at their tab.
+  await checkChrome();
+  await loadTabs();
   // Bring saved conversations back — the copilot reloads every time Slate
   // re-renders its tab, and that must not cost a single message.
   let saved = [];
   try {
     saved = (await fetch('/api/chats').then((r) => r.json())).chats || [];
   } catch { /* fresh start */ }
+  let remembered = {};
+  try {
+    remembered = {
+      chat: localStorage.getItem('copilotActiveChat'),
+      mode: localStorage.getItem('copilotView'),
+    };
+  } catch { /* private mode */ }
   if (saved.length) {
     for (const s of saved) restoreChat(s);
-    activateChat(saved[saved.length - 1].id); // newest last, so open that one
+    // Reopen the chat that was up, or the newest one.
+    activateChat(remembered.chat && chats.has(remembered.chat)
+      ? remembered.chat
+      : saved[saved.length - 1].id);
   } else {
     createChat();
   }
-  await checkChrome();
-  await loadTabs();
+  // Back to the view that was up — Tab reconnects its stream on its own.
+  if (remembered.mode === 'tab' || remembered.mode === 'docs') setMode(remembered.mode);
   try {
     const m = await fetch('/api/model').then((r) => r.json());
     if (m && m.model) $('modelSelect').value = m.model;

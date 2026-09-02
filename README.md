@@ -60,7 +60,7 @@ Then pick the tab in the dropdown and chat.
 - Claude fills fields freely but is instructed **not to click Submit / Send / Buy / etc. unless you explicitly ask**.
 - It only uses information you gave it or that's visible on the page — if something's missing it asks instead of inventing.
 - The Claude session runs with `bypassPermissions`, but the only tools it has are the browser tools above — no shell, no file access.
-- **Stop** interrupts the current turn; **New chat** starts a fresh session (clears Claude's memory).
+- **Stop** interrupts the current turn; **New chat** starts a fresh session. Conversations are saved to disk (`~/.browser-copilot-chats`) and come back — with Claude's memory — after page reloads and server restarts. Each chat also remembers which browser tab it was pinned to, and the app reopens on the chat and view you left. Closing a chat with ✕ is what deletes it.
 
 ## Speed & model
 
