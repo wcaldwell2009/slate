@@ -198,6 +198,101 @@ main { flex: 1; position: relative; overflow: hidden; }
 }
 .new-tab-btn:hover { color: var(--text); border-color: var(--accent); }
 
+/* ---------- documents ---------- */
+#docsView {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  background: var(--bg);
+  display: flex;
+  gap: 14px;
+  padding: 16px;
+  overflow: hidden;
+}
+#docsList {
+  flex: 0 0 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.doc-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "name open" "meta open";
+  align-items: center;
+  column-gap: 10px;
+  padding: 11px 14px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  cursor: pointer;
+}
+.doc-row:hover { border-color: var(--accent); }
+.doc-row.active { background: var(--accent-soft); border-color: rgba(140, 168, 145, 0.45); }
+.doc-name { grid-area: name; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doc-meta { grid-area: meta; color: var(--muted); font-size: 12px; }
+.doc-row .ghost-btn { grid-area: open; }
+.docs-empty { color: var(--muted); font-size: 14px; padding: 10px 4px; line-height: 1.6; }
+#docPreview {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+  font: 13px/1.6 ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---------- attachments + model picker ---------- */
+#attachBtn {
+  flex: none;
+  padding: 11px 12px;
+  border-radius: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+}
+#attachBtn:hover { color: var(--text); }
+#attachRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 780px;
+  margin: 0 auto 8px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 12px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12.5px;
+}
+.attach-chip .x {
+  border: none;
+  background: none;
+  color: var(--muted);
+  padding: 0 4px;
+  font-size: 12px;
+  line-height: 1;
+}
+.attach-chip .x:hover { color: var(--bad); }
+#modelSelect {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 8px;
+  font-size: 13px;
+}
+
 .chat-pane {
   position: absolute;
   inset: 0;

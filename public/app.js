@@ -21,6 +21,10 @@ const TOOL_LABELS = {
   navigate: (i) => `Opening ${String(i.url ?? '').slice(0, 80)}`,
   list_tabs: () => 'Listing your tabs',
   switch_tab: () => 'Switching tab',
+  save_document: (i) => `Writing ${i.name ?? 'a document'}`,
+  read_document: (i) => `Reading ${i.name ?? 'a document'}`,
+  list_documents: () => 'Looking through the documents',
+  Read: (i) => `Reading ${String(i.file_path ?? 'a file').split('/').pop().replace(/^[a-z0-9]+-/, '')}`,
 };
 
 /* ================= Chat ================= */
@@ -188,40 +192,173 @@ const tabView = $('tabView');
 const tabImg = $('tabImg');
 const tabHint = $('tabHint');
 let viewMode = 'chat';
-let watching = null;  // tabId the server is streaming to us, null when none
-let frameMeta = null; // page viewport size in CSS px, from the latest frame
+let watching = false;  // whether the server is streaming the live view to us
+let frameMeta = null;  // page viewport size in CSS px, from the latest frame
+
+// The dropdown is the one control: the viewer shows whichever tab it names,
+// without touching Opera — the front tab streams smoothly, a background tab
+// updates about once a second, and both are clickable.
+function syncViewToDropdown() {
+  if (watching && ready && tabSelect.value) {
+    ws?.send(JSON.stringify({ type: 'view_tab', tabId: tabSelect.value }));
+  }
+}
 
 function setMode(mode) {
   viewMode = mode;
   $('viewChat').classList.toggle('active', mode === 'chat');
   $('viewTab').classList.toggle('active', mode === 'tab');
+  $('viewDocs').classList.toggle('active', mode === 'docs');
   tabView.hidden = mode !== 'tab';
+  $('docsView').hidden = mode !== 'docs';
   if (mode === 'tab') tabView.focus();
   else input.focus();
+  if (mode === 'docs') refreshDocs();
   syncWatch();
 }
 $('viewChat').onclick = () => setMode('chat');
 $('viewTab').onclick = () => setMode('tab');
+$('viewDocs').onclick = () => setMode('docs');
 
-// Ask the server for frames of the tab we should be showing — or for silence.
-// Called from every place the answer can change: mode switch, chat switch,
-// tab dropdown, Claude switching tabs, and reconnect.
-function syncWatch() {
+/* ================= documents ================= */
+// Files Claude has made — the Browser Copilot folder in Documents. Click a
+// file to read it here; Open hands it to the normal app for that type.
+let openDocName = null;
+function fmtBytes(n) {
+  return n > 1024 * 1024 ? (n / 1048576).toFixed(1) + ' MB' : n > 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
+}
+async function refreshDocs() {
+  if (viewMode !== 'docs') return;
+  let r;
+  try { r = await fetch('/api/docs').then((x) => x.json()); } catch { return; }
+  const list = $('docsList');
+  list.innerHTML = '';
+  if (!r || !r.ok || !r.docs.length) {
+    const empty = document.createElement('div');
+    empty.className = 'docs-empty';
+    empty.textContent = 'Nothing here yet — ask Claude to write something up and it lands in this list (and in the "Browser Copilot" folder in your Documents).';
+    list.appendChild(empty);
+    $('docPreview').hidden = true;
+    openDocName = null;
+    return;
+  }
+  if (openDocName && !r.docs.some((d) => d.name === openDocName)) {
+    openDocName = null;
+    $('docPreview').hidden = true;
+  }
+  for (const d of r.docs) {
+    const row = document.createElement('div');
+    row.className = 'doc-row' + (d.name === openDocName ? ' active' : '');
+    const name = document.createElement('div');
+    name.className = 'doc-name';
+    name.textContent = d.name;
+    const meta = document.createElement('div');
+    meta.className = 'doc-meta';
+    meta.textContent = fmtBytes(d.bytes) + ' · ' + new Date(d.modified).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const openBtn = document.createElement('button');
+    openBtn.className = 'ghost-btn small';
+    openBtn.textContent = 'Open';
+    openBtn.title = 'Open with the normal app for this file type';
+    openBtn.onclick = (e) => {
+      e.stopPropagation();
+      fetch('/api/docs/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: d.name }) });
+    };
+    row.append(name, meta, openBtn);
+    row.onclick = () => showDoc(d.name);
+    list.appendChild(row);
+  }
+}
+async function showDoc(name) {
+  let r;
+  try {
+    r = await fetch('/api/docs/content?name=' + encodeURIComponent(name)).then((x) => x.json());
+  } catch { return; }
+  if (!r || !r.ok) return;
+  openDocName = name;
+  const pre = $('docPreview');
+  pre.textContent = r.content + (r.truncated ? '\n\n… (long file — Open shows the rest)' : '');
+  pre.hidden = false;
+  document.querySelectorAll('.doc-row').forEach((n) => n.classList.toggle('active', n.querySelector('.doc-name')?.textContent === name));
+}
+
+/* ================= model picker ================= */
+$('modelSelect').onchange = async () => {
+  const r = await fetch('/api/model', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: $('modelSelect').value }),
+  }).then((x) => x.json()).catch(() => null);
   const chat = chats.get(activeId);
-  const want = viewMode === 'tab' && ready ? chat?.tabId || tabSelect.value || null : null;
+  if (chat) {
+    chat.lastMeta = r && r.ok ? `New chats will use ${$('modelSelect').value}` : 'Could not change the model';
+    syncFooter();
+  }
+};
+
+/* ================= attachments ================= */
+// Files for Claude to look at. Uploaded as soon as they are picked, listed
+// as chips over the composer, and referenced in the next message sent.
+const pendingFiles = []; // {name, path}
+function renderAttachChips() {
+  const row = $('attachRow');
+  row.innerHTML = '';
+  row.hidden = pendingFiles.length === 0;
+  pendingFiles.forEach((f, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'attach-chip';
+    chip.textContent = f.name;
+    const x = document.createElement('button');
+    x.className = 'x';
+    x.textContent = '✕';
+    x.title = 'Remove';
+    x.onclick = () => { pendingFiles.splice(i, 1); renderAttachChips(); };
+    chip.appendChild(x);
+    row.appendChild(chip);
+  });
+}
+$('attachBtn').onclick = () => $('fileInput').click();
+$('fileInput').onchange = async () => {
+  for (const f of $('fileInput').files) {
+    if (f.size > 20 * 1024 * 1024) {
+      const chat = chats.get(activeId);
+      if (chat) { chat.lastMeta = `"${f.name}" is too big (20 MB max)`; syncFooter(); }
+      continue;
+    }
+    const b64 = await new Promise((res) => {
+      const reader = new FileReader();
+      reader.onload = () => res(String(reader.result).split(',')[1] || '');
+      reader.readAsDataURL(f);
+    });
+    const r = await fetch('/api/upload', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ filename: f.name, content_base64: b64 }),
+    }).then((x) => x.json()).catch(() => null);
+    if (r && r.ok) {
+      pendingFiles.push({ name: r.name, path: r.path });
+      renderAttachChips();
+    } else {
+      const chat = chats.get(activeId);
+      if (chat) { chat.lastMeta = (r && r.error) || `Could not attach "${f.name}"`; syncFooter(); }
+    }
+  }
+  $('fileInput').value = '';
+};
+
+// The live view MIRRORS the browser: it always shows whatever tab is active
+// in the window, and follows along when that changes — the server does the
+// following. So the only question here is on or off.
+function syncWatch() {
+  const want = viewMode === 'tab' && ready;
   if (want === watching) return;
-  if (watching) ws?.send(JSON.stringify({ type: 'unwatch_tab' }));
   watching = want;
   frameMeta = null;
   tabImg.hidden = true;
   tabImg.removeAttribute('src');
   tabHint.hidden = false;
-  if (want) {
-    tabHint.textContent = 'Connecting to the tab…';
-    ws?.send(JSON.stringify({ type: 'watch_tab', tabId: want }));
-  } else {
-    tabHint.textContent = 'Pick a tab above to see it here.';
-  }
+  tabHint.textContent = want ? 'Connecting…' : '';
+  // The dropdown's tab rides along so the server pins it from the first frame.
+  ws?.send(JSON.stringify(want
+    ? { type: 'watch_tab', tabId: tabSelect.value || undefined }
+    : { type: 'unwatch_tab' }));
 }
 
 // Map a mouse position on the scaled-down image to the page's own pixels.
@@ -236,7 +373,8 @@ function pageXY(e) {
 }
 
 function sendPageInput(event) {
-  if (watching && ready) ws?.send(JSON.stringify({ type: 'input', tabId: watching, event }));
+  // The server routes input to the tab it is currently streaming.
+  if (watching && ready) ws?.send(JSON.stringify({ type: 'input', event }));
 }
 
 tabImg.addEventListener('mousedown', (e) => {
@@ -282,7 +420,7 @@ $('newTabBtn').onclick = async () => {
     if (r.ok && r.tab) {
       await loadTabs(r.tab.id);
       tabSelect.value = r.tab.id;
-      tabSelect.onchange(); // pins the chat to it and points the stream at it
+      tabSelect.onchange(); // pins the chat AND the viewer to the fresh tab
     } else {
       tabHint.textContent = (r && r.error) || 'Could not open a tab.';
       tabHint.hidden = false;
@@ -322,6 +460,27 @@ function createChat() {
   return chat;
 }
 
+// A chat coming back from disk: same Chat object, bubbles rebuilt. The
+// server keeps (or replays) Claude's memory for it, so it just continues.
+function restoreChat(stored) {
+  const chat = new Chat(stored.id);
+  chats.set(chat.id, chat);
+  if (stored.title) chat.setTitle(stored.title);
+  if (stored.messages && stored.messages.length) {
+    chat.welcome?.remove();
+    chat.welcome = null;
+    for (const m of stored.messages) {
+      if (m.role === 'you') {
+        chat.addMsg('user', m.text);
+      } else {
+        const bubble = chat.addMsg('claude', '');
+        renderMd(bubble, m.text);
+      }
+    }
+  }
+  return chat;
+}
+
 function activateChat(id) {
   activeId = id;
   for (const c of chats.values()) {
@@ -334,7 +493,7 @@ function activateChat(id) {
     tabSelect.value = chat.tabId;
   }
   syncFooter();
-  syncWatch(); // the live view shows the chat you're looking at
+  syncViewToDropdown(); // each chat brings its own tab into the viewer
   input.focus();
 }
 
@@ -376,14 +535,11 @@ function connect() {
 
   ws.onclose = () => {
     ready = false;
-    watching = null; // the server-side stream died with the socket
+    watching = false; // the server-side stream died with the socket
     sendBtn.disabled = true;
     $('metaLine').textContent = 'Disconnected — reconnecting…';
-    // server-side sessions died with the socket; tell each chat
-    for (const c of chats.values()) {
-      if (c.pane.querySelector('.msg')) c.addMsg('system', 'Connection lost — Claude’s memory for this chat was reset.');
-      c.setBusy(false);
-    }
+    // Sessions and transcripts survive on the server now; nothing is lost.
+    for (const c of chats.values()) c.setBusy(false);
     setTimeout(connect, 1500);
   };
 }
@@ -406,9 +562,19 @@ function handleEvent(msg) {
     }
     return;
   }
+  if (msg.type === 'watching') {
+    // The viewer moved to a different tab (or found none).
+    frameMeta = null;
+    if (!msg.tabId) {
+      tabImg.hidden = true;
+      tabHint.textContent = 'Nothing to show — open a tab.';
+      tabHint.hidden = false;
+    }
+    return;
+  }
   if (msg.type === 'watch_error') {
     tabImg.hidden = true;
-    tabHint.textContent = msg.error || 'Could not show that tab.';
+    tabHint.textContent = msg.error || 'Could not show the browser.';
     tabHint.hidden = false;
     return;
   }
@@ -447,10 +613,16 @@ function handleEvent(msg) {
       break;
 
     case 'tab_switched':
-      loadTabs();
       chat.tabId = msg.tabId;
       chat.addMsg('system', `Claude switched to tab: ${msg.title || msg.tabId}`);
-      if (chat.id === activeId) syncWatch(); // the live view follows Claude
+      if (chat.id === activeId) {
+        loadTabs(msg.tabId).then(() => {
+          tabSelect.value = msg.tabId;
+          syncViewToDropdown(); // the viewer follows Claude's move
+        });
+      } else {
+        loadTabs();
+      }
       break;
 
     case 'turn_done':
@@ -460,9 +632,9 @@ function handleEvent(msg) {
         state.classList.remove('spinner');
         state.textContent = '·';
       });
-      if (typeof msg.costUsd === 'number') chat.lastMeta = `Turn cost $${msg.costUsd.toFixed(4)}`;
       if (!msg.ok && msg.subtype) chat.addMsg('system error', `Turn ended: ${msg.subtype}`);
-      if (chat.id === activeId) { syncFooter(); input.focus(); }
+      if (chat.id === activeId) { syncFooter(); if (viewMode !== 'tab') input.focus(); }
+      refreshDocs(); // a no-op unless the Documents view is up
       break;
 
     case 'interrupted':
@@ -504,14 +676,21 @@ function renderMd(el, text) {
 
 function sendMessage() {
   const chat = chats.get(activeId);
-  const text = input.value.trim();
+  let text = input.value.trim();
+  if (!text && pendingFiles.length) text = 'Take a look at the attached file.';
   if (!text || !ready || !chat || chat.busy) return;
   chat.welcome?.remove();
   chat.welcome = null;
   if (chat.title === 'New chat') chat.setTitle(text);
   chat.tabId = tabSelect.value || null;
-  chat.addMsg('user', text);
-  ws.send(JSON.stringify({ type: 'chat', chatId: chat.id, text, tabId: chat.tabId }));
+  const attachments = pendingFiles.map((f) => f.path);
+  const shown = pendingFiles.length
+    ? text + '\n(attached: ' + pendingFiles.map((f) => f.name).join(', ') + ')'
+    : text;
+  chat.addMsg('user', shown);
+  ws.send(JSON.stringify({ type: 'chat', chatId: chat.id, text, tabId: chat.tabId, attachments }));
+  pendingFiles.length = 0;
+  renderAttachChips();
   input.value = '';
   input.style.height = 'auto';
   chat.setBusy(true);
@@ -570,17 +749,20 @@ tabSelect.onchange = () => {
     chat.tabId = tabSelect.value || null;
     ws?.send(JSON.stringify({ type: 'select_tab', chatId: chat.id, tabId: chat.tabId }));
   }
-  syncWatch();
+  syncViewToDropdown(); // the viewer shows what the dropdown says
 };
 
 $('refreshTabs').onclick = () => loadTabs();
 
+let browserName = 'browser';
 async function checkChrome() {
   try {
-    const { chrome: up } = await fetch('/api/status').then((r) => r.json());
+    const { chrome: up, browser } = await fetch('/api/status').then((r) => r.json());
+    if (browser) browserName = browser; // Opera on Will's machine, Chrome as fallback
     $('chromeStatus').className = `status-dot ${up ? 'on' : 'off'}`;
-    $('chromeStatus').title = up ? 'Chrome connected' : 'Chrome not connected';
+    $('chromeStatus').title = up ? `${browserName} connected` : `${browserName} not connected`;
     $('launchChrome').hidden = up;
+    $('launchChrome').textContent = `Launch ${browserName}`;
     return up;
   } catch {
     return false;
@@ -592,8 +774,8 @@ $('launchChrome').onclick = async () => {
   $('launchChrome').textContent = 'Launching…';
   const res = await fetch('/api/launch-chrome', { method: 'POST' }).then((r) => r.json());
   $('launchChrome').disabled = false;
-  $('launchChrome').textContent = 'Launch Chrome';
-  if (!res.ok) alert(res.error || 'Could not launch Chrome');
+  $('launchChrome').textContent = `Launch ${browserName}`;
+  if (!res.ok) alert(res.error || `Could not launch ${browserName}`);
   await checkChrome();
   await loadTabs();
 };
@@ -606,9 +788,24 @@ window.addEventListener('focus', async () => {
 /* ================= init ================= */
 (async () => {
   connect();
-  createChat();
+  // Bring saved conversations back — the copilot reloads every time Slate
+  // re-renders its tab, and that must not cost a single message.
+  let saved = [];
+  try {
+    saved = (await fetch('/api/chats').then((r) => r.json())).chats || [];
+  } catch { /* fresh start */ }
+  if (saved.length) {
+    for (const s of saved) restoreChat(s);
+    activateChat(saved[saved.length - 1].id); // newest last, so open that one
+  } else {
+    createChat();
+  }
   await checkChrome();
   await loadTabs();
+  try {
+    const m = await fetch('/api/model').then((r) => r.json());
+    if (m && m.model) $('modelSelect').value = m.model;
+  } catch { /* the picker just shows the default */ }
   setInterval(checkChrome, 10000);
   input.focus();
 })();

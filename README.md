@@ -16,7 +16,7 @@ Chat with a headless Claude Code session that can **see your Chrome tabs and fil
 
 - The **UI** (http://localhost:4321) has a sidebar of chats, a tab selector, and a chat pane. Each chat is pinned to its own browser tab and runs its own Claude session — add more chats with **＋ New chat** to work several tabs **in parallel** (a spinner in the sidebar shows which chats are busy).
 - Each chat runs a persistent **headless Claude Code session** via the Claude Agent SDK — it keeps context across messages like a normal chat.
-- Claude gets **browser tools only** (`read_page`, `fill_field`, `click_element`, `press_key`, `screenshot`, `navigate`, `list_tabs`, `switch_tab`); the default file/bash tools are disabled.
+- Claude gets **browser tools** (`read_page`, `fill_field`, `click_element`, `press_key`, `screenshot`, `navigate`, `list_tabs`, `switch_tab`), **document tools** (`save_document` / `list_documents` / `read_document`, sandboxed to `~/Documents/Browser Copilot` — the **Documents** view shows what it makes), and **Read** for files you attach with the paperclip (text, images, PDFs). Bash/Write/Edit and everything else stay disabled.
 - Filling uses native value setters + `input`/`change` events, so React/Vue/Angular forms register it.
 
 ## Setup
@@ -29,16 +29,28 @@ npm install
 npm start          # → http://localhost:4321
 ```
 
-## Connecting Chrome
+## Putting it on another computer
 
-Claude talks to Chrome over the DevTools port (9222). Chrome 136+ doesn't allow that on your default profile, so Browser Copilot uses a **separate Chrome profile** (`~/.browser-copilot-chrome`):
-
-- Click **Launch Chrome** in the UI (appears when no Chrome is connected). It starts **invisibly — no window anywhere**. Use the **Tab** view (top bar) to see the pages live and click/type in them, and its **＋ New tab** button to open tabs; the viewer is the only place these tabs exist. Log in to sites through the viewer as needed; the profile remembers logins between runs.
-- If a picky site fights the windowless browser (extra captchas, fussy logins), launch a visible one yourself instead — everything else works the same:
+Clone it where Slate looks for it — a "Browser Copilot" folder on the Desktop — then install:
 
 ```bash
-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
-  --remote-debugging-port=9222 --user-data-dir="$HOME/.browser-copilot-chrome"
+git clone https://github.com/wcaldwell2009/browser-copilot "$HOME/Desktop/Browser Copilot/browser-copilot"
+cd "$HOME/Desktop/Browser Copilot/browser-copilot"
+npm install
+```
+
+Slate's Copilot tab takes it from there (its Start button launches the server). Needs Node 18+, Opera (or Chrome/Edge — it finds whichever is installed, on Windows and Mac both), and a logged-in Claude Code. On a fresh machine the copilot's browser profile starts empty; log into sites once in its window and they're remembered.
+
+## Connecting Chrome
+
+Claude talks to the browser over the DevTools port (9222). The copilot drives **Opera** when it's installed (Chrome as fallback). One engine rule to know: Chromium 136+ refuses the debugging port on a browser's **default profile**, so no tool can attach to your everyday browser window — the copilot uses a dedicated profile instead (`~/.browser-copilot-opera`, seeded once with a copy of the real Opera profile: same logins, bookmarks and saved session).
+
+- Click **Launch Opera** in the UI (appears when nothing is connected). A real, visible Opera window opens with your stuff in it — browse there when using the tool, or drive it from the **Tab** view (live, clickable) without ever looking at the window. **＋ New tab** in the viewer opens tabs too.
+- Launching that profile by hand works the same:
+
+```bash
+"$HOME/Applications/Opera.app/Contents/MacOS/Opera" \
+  --remote-debugging-port=9222 --user-data-dir="$HOME/.browser-copilot-opera"
 ```
 
 Then pick the tab in the dropdown and chat.
@@ -49,13 +61,12 @@ Then pick the tab in the dropdown and chat.
 - It only uses information you gave it or that's visible on the page — if something's missing it asks instead of inventing.
 - The Claude session runs with `bypassPermissions`, but the only tools it has are the browser tools above — no shell, no file access.
 - **Stop** interrupts the current turn; **New chat** starts a fresh session (clears Claude's memory).
-- Per-turn API cost shows under the composer after each response.
 
 ## Speed & model
 
 Built for minimal model round-trips: every message carries a fresh page snapshot (so Claude usually acts without a `read_page` call), multi-field fills happen in one `fill_many` call, and fill results double as verification. A typical "fill this form" turn is one tool call, ~5–8 seconds.
 
-Default model is Sonnet (measured fastest for this workload). Override per run with `COPILOT_MODEL=opus npm start` (or `haiku`, or a full model id).
+Default model is Sonnet (measured fastest for this workload). The picker in the header switches between Sonnet, Opus and Haiku — the choice is saved and applies to chats started after the change. `COPILOT_MODEL` still works as the fallback default.
 
 ## Limitations
 

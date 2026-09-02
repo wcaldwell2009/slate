@@ -6,23 +6,93 @@ import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
 import * as chrome from './lib/chrome.js';
+import * as docs from './lib/docs.js';
+import * as chats from './lib/chats.js';
+import { MODELS, currentModel, writeSettings } from './lib/settings.js';
 import { ChatSession } from './lib/claude.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4321;
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: '30mb' })); // attachments arrive base64 in the body
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/api/status', async (req, res) => {
-  res.json({ chrome: await chrome.isChromeUp() });
+  res.json({ chrome: await chrome.isChromeUp(), browser: chrome.browserName() });
 });
 
 app.get('/api/tabs', async (req, res) => {
   try {
     res.json({ ok: true, tabs: await chrome.listTabs() });
+  } catch (err) {
+    res.json({ ok: false, error: String(err.message || err) });
+  }
+});
+
+// ---- documents, model, attachments ----------------------------------------
+app.get('/api/docs', (req, res) => {
+  try {
+    res.json({ ok: true, docs: docs.listDocs() });
+  } catch (err) {
+    res.json({ ok: false, error: String(err.message || err) });
+  }
+});
+
+app.get('/api/docs/content', (req, res) => {
+  try {
+    res.json({ ok: true, ...docs.readDoc(req.query.name) });
+  } catch (err) {
+    res.json({ ok: false, error: String(err.message || err) });
+  }
+});
+
+// Opens a document with whatever app the machine uses for that type. The
+// path always comes from docs.docPath (a checked name inside the folder),
+// never from the request.
+app.post('/api/docs/open', (req, res) => {
+  const p = docs.docPath(req.body && req.body.name);
+  if (!p) return res.json({ ok: false, error: 'No document with that name.' });
+  try {
+    // "start" is a cmd builtin on Windows, not a program — same shape as
+    // Slate's own openers.
+    if (process.platform === 'win32') {
+      spawn('cmd', ['/c', 'start', '', p], { detached: true, stdio: 'ignore' }).unref();
+    } else {
+      spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [p], { detached: true, stdio: 'ignore' }).unref();
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.json({ ok: false, error: String(err.message || err) });
+  }
+});
+
+app.get('/api/model', (req, res) => {
+  res.json({ ok: true, model: currentModel(), models: MODELS });
+});
+
+app.post('/api/model', (req, res) => {
+  const model = req.body && req.body.model;
+  if (!MODELS.includes(model)) return res.json({ ok: false, error: 'Unknown model.' });
+  writeSettings({ model });
+  res.json({ ok: true, model });
+});
+
+app.post('/api/upload', (req, res) => {
+  try {
+    res.json(docs.saveAttachment(req.body && req.body.filename, req.body && req.body.content_base64));
+  } catch (err) {
+    res.json({ ok: false, error: String(err.message || err) });
+  }
+});
+
+// Saved conversations, so the page can rebuild its chats after any reload.
+app.get('/api/chats', (req, res) => {
+  try {
+    res.json({ ok: true, chats: chats.listChats() });
   } catch (err) {
     res.json({ ok: false, error: String(err.message || err) });
   }
@@ -44,32 +114,69 @@ app.post('/api/launch-chrome', async (req, res) => {
     await new Promise((r) => setTimeout(r, 500));
     if (await chrome.isChromeUp()) return res.json({ ok: true });
   }
-  res.json({ ok: false, error: 'Chrome did not come up on the DevTools port. Close all Chrome windows and try again.' });
+  res.json({ ok: false, error: `${chrome.browserName()} did not come up on the DevTools port. If a copilot browser window is already open from before, close it and try again.` });
 });
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
+// SESSIONS OUTLIVE THE PAGE. The copilot lives in an iframe that Slate tears
+// down every time Will switches Slate tabs, so a per-connection session map
+// meant Claude forgot everything on every navigation. Sessions live here at
+// module scope, events go to whichever connection is current, transcripts go
+// to disk (lib/chats.js), and a session that died — server restart, idle
+// reaping — is handed the story so far on its next message.
+const sessions = new Map(); // chatId -> ChatSession
+let uiSend = null; // the send() of the most recent connection
+
+function flushTurn(chatId, session) {
+  if (session.__turnBuf && session.__turnBuf.length) {
+    chats.appendMessage(chatId, 'claude', session.__turnBuf.join('\n\n'));
+    session.__turnBuf = [];
+  }
+}
+
+function getSession(chatId) {
+  let session = sessions.get(chatId);
+  if (!session) {
+    // The model picker applies to chats started after it changes.
+    session = new ChatSession((event) => {
+      if (event.type === 'text') session.__turnBuf.push(event.text);
+      if (event.type === 'turn_done') flushTurn(chatId, session);
+      if (uiSend) uiSend({ ...event, chatId });
+    }, currentModel());
+    session.__turnBuf = [];
+    // A transcript on disk means this chat is resuming in a fresh session.
+    const stored = chats.getChat(chatId);
+    session.__needsReplay = !!(stored && stored.messages && stored.messages.length);
+    session.start();
+    sessions.set(chatId, session);
+  }
+  session.lastUsed = Date.now();
+  return session;
+}
+
+// An idle session still holds a hidden claude process; let long-quiet ones
+// go. The transcript stays, so the chat resumes seamlessly when poked.
+setInterval(() => {
+  for (const [id, s] of sessions) {
+    if (Date.now() - (s.lastUsed || 0) > 3 * 60 * 60 * 1000) {
+      try { s.dispose(); } catch { /* already gone */ }
+      sessions.delete(id);
+    }
+  }
+}, 15 * 60 * 1000).unref();
+
 wss.on('connection', (ws) => {
   const send = (event) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
   };
+  uiSend = send; // chat events follow the newest page
 
-  // One Claude session per chat, created lazily; all share this connection.
-  const sessions = new Map(); // chatId -> ChatSession
-  // One live tab view per connection — the UI shows one tab at a time.
-  let stopCast = null;
+  // One live view per connection — the screencast dies with the socket.
+  let watcher = null;
   const stopWatching = () => {
-    if (stopCast) { try { stopCast(); } catch { /* already gone */ } stopCast = null; }
-  };
-  const getSession = (chatId) => {
-    let session = sessions.get(chatId);
-    if (!session) {
-      session = new ChatSession((event) => send({ ...event, chatId }));
-      session.start();
-      sessions.set(chatId, session);
-    }
-    return session;
+    if (watcher) { try { watcher.stop(); } catch { /* already gone */ } watcher = null; }
   };
 
   send({ type: 'connected' });
@@ -96,9 +203,31 @@ wss.on('connection', (ws) => {
           // Chrome not reachable; Claude's tools will report it.
         }
       }
-      getSession(chatId).sendMessage(msg.text.trim(), msg.tabId || null, tabLabel, snapshot);
+      // Attachment paths must be files the upload endpoint produced — never
+      // an arbitrary path a page script could have slipped into the message.
+      const attachments = (Array.isArray(msg.attachments) ? msg.attachments : [])
+        .filter((p) => typeof p === 'string' && p.startsWith(docs.ATTACH_DIR + path.sep) && fs.existsSync(p))
+        .slice(0, 8);
+      const session = getSession(chatId);
+      let text = msg.text.trim();
+      // A resuming session gets the story so far BEFORE this message is
+      // added to the transcript, so the current question isn't in it twice.
+      if (session.__needsReplay) {
+        session.__needsReplay = false;
+        const story = chats.transcriptFor(chatId);
+        if (story) {
+          text = '[This chat is continuing after a restart. The conversation so far:\n'
+            + story
+            + '\nEnd of the earlier conversation — pick up naturally from there and do not mention this note.]\n\n'
+            + text;
+        }
+      }
+      chats.appendMessage(chatId, 'you', msg.text.trim());
+      session.sendMessage(text, msg.tabId || null, tabLabel, snapshot, attachments);
     } else if (msg.type === 'interrupt') {
-      const ok = await sessions.get(chatId)?.interrupt();
+      const stopped = sessions.get(chatId);
+      const ok = await stopped?.interrupt();
+      if (stopped) flushTurn(chatId, stopped); // keep whatever it had said
       send({ type: 'interrupted', ok: !!ok, chatId });
     } else if (msg.type === 'select_tab') {
       const session = sessions.get(chatId);
@@ -106,28 +235,40 @@ wss.on('connection', (ws) => {
     } else if (msg.type === 'close_chat') {
       sessions.get(chatId)?.dispose();
       sessions.delete(chatId);
+      chats.deleteChat(chatId); // closing a chat forgets it on purpose
     } else if (msg.type === 'watch_tab') {
-      // Live view of one tab: stream screencast frames until unwatched.
+      // Live view of the dropdown's tab (rides along as msg.tabId so the
+      // right tab is pinned from the first frame). Opera is never touched.
       stopWatching();
-      if (typeof msg.tabId === 'string' && msg.tabId) {
-        try {
-          stopCast = await chrome.watchTab(msg.tabId, (data, meta) => send({ type: 'frame', data, meta }));
-        } catch (err) {
-          send({ type: 'watch_error', error: String(err.message || err) });
-        }
+      try {
+        watcher = await chrome.watchView(
+          (data, meta) => send({ type: 'frame', data, meta }),
+          (tabId, title, url, pinned) => send({ type: 'watching', tabId, title, url, pinned })
+        );
+        if (typeof msg.tabId === 'string' && msg.tabId) await watcher.pin(msg.tabId);
+      } catch (err) {
+        send({ type: 'watch_error', error: String(err.message || err) });
       }
     } else if (msg.type === 'unwatch_tab') {
       stopWatching();
-    } else if (msg.type === 'input' && typeof msg.tabId === 'string' && msg.event) {
-      // Clicks/typing from the live view, mapped to page pixels by the UI.
-      try { await chrome.sendInput(msg.tabId, msg.event); } catch { /* best-effort */ }
+    } else if (msg.type === 'view_tab' && typeof msg.tabId === 'string' && msg.tabId) {
+      // The dropdown changed: show that tab in the viewer.
+      try {
+        if (watcher) await watcher.pin(msg.tabId);
+      } catch { /* tab may be gone; a closed pin falls back on its own */ }
+    } else if (msg.type === 'input' && msg.event) {
+      // Clicks/typing from the live view go to the tab being streamed.
+      const target = (watcher && watcher.current()) || null;
+      if (target) {
+        try { await chrome.sendInput(target, msg.event); } catch { /* best-effort */ }
+      }
     }
   });
 
   ws.on('close', () => {
     stopWatching();
-    for (const session of sessions.values()) session.dispose();
-    sessions.clear();
+    // Sessions deliberately survive the page going away — see above.
+    if (uiSend === send) uiSend = null;
   });
 });
 
