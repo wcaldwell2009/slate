@@ -1,7 +1,7 @@
 # Slate — School Tracker App — Project Handoff
 
 ## Last Updated
-2026-09-01 (round 67 — copilot chats persist; the forgetting is fixed)
+2026-09-02 (round 68 — copilot restores tab pins, view and open chat on reload)
 
 ## What this project is
 Slate is a **local desktop app** that helps Will keep on top of school work. It
@@ -228,6 +228,26 @@ in the prompt as the student's work to critique, never to improve.
 Node (here, inserting a conversation straight into the shots database) before
 the page is photographed, because that server runs with `SLATE_NO_AI=1` and
 cannot have a conversation of its own.
+
+**Round 68 — full state restore across the iframe reload (2026-09-02).**
+
+Will: clicking off the Copilot tab and back should keep "my tabs". Round 67
+restored the transcripts; three pieces of state still reset: each chat's
+pinned browser tab, the active chat, and the view. Now: **`chats.setTabId`
+persists the pin server-side** (written on every chat message and on
+select_tab; no-op for a chat with no transcript file yet), `restoreChat`
+puts it back on the Chat object, and **boot loads tabs BEFORE restoring
+chats** so `activateChat` can point the dropdown at an option that exists.
+The active chat and viewMode live in `localStorage` (same origin across
+iframe rebuilds; try/catch per the usual storage rules) — `setMode` and
+`activateChat` write them, boot replays them, and a restored 'tab' mode
+reconnects the stream by itself once the ws says connected. A pinned tab
+that no longer exists just leaves the dropdown at its default.
+
+Verified by driving the real page headless on the rig: pin a tab, send a
+message, switch to Tab view, `Page.navigate` reload (exactly what Slate's
+re-render does to the iframe) — chat, bubbles, active chat, dropdown pin
+and view all came back identical. Seven checks green.
 
 **Round 67 — copilot chats persist; the forgetting is fixed (2026-09-01).**
 
@@ -2158,13 +2178,20 @@ against. Not started yet.
   everything still works. Wire the real API when he says go. Stored in `.env`.
 
 ## Next Recommended Step
-**FIRST THING: the Desktop app has no Canvas connection.** Build 7 is installed
-and runs, but `%LOCALAPPDATA%\Slate\data\slate.db` is empty and reports
-`canvas_mode: 'none'` — the real token lives in the WORKSHOP database. So
-double-clicking the icon opens an empty Slate asking him to connect. He has been
-told twice and has not picked: either he pastes the token on the API tab himself
-(two minutes), or **he asks for the settings to be copied across** — do not do
-that unasked, it is his live data.
+**Will is setting the copilot up on his Windows PC** (2026-09-02). He was
+given the steps: clone `wcaldwell2009/browser-copilot` into
+`Desktop\Browser Copilot\browser-copilot`, `npm install` there, then in the
+Slate workshop `git pull` + `npm run push` to update the installed app. The
+copilot's Windows browser paths and openers were added in round 68's push —
+untested on real Windows, so if he reports the Copilot tab not finding
+Opera there, `lib/chrome.js`'s BROWSERS list is where to look. On the Mac
+everything runs: Slate on 4173, copilot on 4321, both started fresh
+2026-09-02.
+
+Older Windows note, still true last it was checked: the installed Desktop
+app there (`%LOCALAPPDATA%\Slate\data\slate.db`) had no Canvas connection —
+the token lives in the workshop database. He pastes the token on the API tab
+himself, or **asks** for the settings to be copied across; never unasked.
 
 Open, all offered and none refused — just not answered yet:
 - **The personal-settings leak is only fixed in claude.js** (round 51).
@@ -2246,6 +2273,11 @@ Open, all offered and none refused — just not answered yet:
 - Will's instruction in a message IS approval.
 
 ## Activity Log
+- **2026-09-02 (round 68)** — Clicking off the Copilot tab and back now lands
+  exactly where you were: each chat remembers which browser tab it was
+  pinned to (stored with the transcript), and the open chat + current view
+  come back via localStorage. Verified with a scripted real-page reload:
+  everything restored identical, seven checks green.
 - **2026-09-01 (round 67)** — Fixed the copilot forgetting conversations:
   every Slate navigation reloaded its page and threw the sessions away.
   Chats now persist to disk, rebuild in the UI after any reload, survive

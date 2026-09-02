@@ -1,5 +1,16 @@
 # What's been built — plain English
 
+## 2026-09-02 — Click away, click back, nothing moves
+
+Yesterday's fix brought the conversations back after you left the Copilot
+tab; now the rest comes back too. Click off to another Slate tab and return
+and you land exactly where you were: the same chat open, still pinned to the
+same browser tab in the dropdown, and still on whichever of Chat / Tab /
+Documents you had up — the live view just reconnects itself.
+
+Proven with a real page reload: chat, messages, pinned tab and view all came
+back identical.
+
 ## 2026-09-01 — The copilot stopped forgetting
 
 You caught a real bug: Claude's memory lived only inside a running process,

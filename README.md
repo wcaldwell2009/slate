@@ -72,6 +72,21 @@ or slide deck, then either **Save to my Desktop** or **Submit to Canvas**.
 Written work comes out as proper MLA — Times New Roman 12, double spaced, with
 your heading filled in.
 
+## The Copilot tab
+
+The **Copilot** tab hosts [Browser Copilot](https://github.com/wcaldwell2009/browser-copilot)
+— a separate project that lives in its own folder and runs its own little
+server. It's a chat with Claude that drives its own browser window (Opera,
+falling back to Chrome or Edge): it reads pages, fills forms in, makes
+documents, and shows a live, clickable view of any tab right inside Slate.
+Conversations are saved on disk and survive reloads and restarts.
+
+To set it up on a machine, clone that repo into a `Browser Copilot/browser-copilot`
+folder on the Desktop (that's where Slate looks — or set `SLATE_COPILOT_DIR`),
+run `npm install` in it once, then use the Start button on the Copilot tab.
+It needs a logged-in Claude Code. Slate and the copilot share no data — the
+tab just frames it.
+
 ## Working on Slate itself
 `Start Slate.bat` (or `npm start`) runs the **workshop copy** straight out of
 this folder on http://localhost:4173, with its own separate data. It's for trying
