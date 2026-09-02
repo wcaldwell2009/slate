@@ -1,7 +1,7 @@
 # Slate — School Tracker App — Project Handoff
 
 ## Last Updated
-2026-08-31 (round 60 — invisible Chrome + New tab in the viewer)
+2026-09-01 (round 67 — copilot chats persist; the forgetting is fixed)
 
 ## What this project is
 Slate is a **local desktop app** that helps Will keep on top of school work. It
@@ -228,6 +228,186 @@ in the prompt as the student's work to critique, never to improve.
 Node (here, inserting a conversation straight into the shots database) before
 the page is photographed, because that server runs with `SLATE_NO_AI=1` and
 cannot have a conversation of its own.
+
+**Round 67 — copilot chats persist; the forgetting is fixed (2026-09-01).**
+
+Will: "my claude has short term memory loss." Root cause, and it was
+structural: **sessions lived in a per-CONNECTION map, and the copilot lives
+in an iframe that renderCopilot rebuilds on every Slate navigation** — so
+switching Slate tabs reloaded the page, dropped the ws, and the server
+disposed every session. My round 65/66 server restarts did the same.
+
+The fix is Slate's round 51 lesson applied here: **the transcript is the
+durable thing.** `lib/chats.js` (one JSON per chat,
+`~/.browser-copilot-chats`, `COPILOT_CHATS_DIR` for rigs) stores every turn
+— user text on send, Claude's text buffered per turn (`__turnBuf`, flushed
+on turn_done AND on interrupt so a stopped reply is kept). In server.js the
+**sessions map moved to module scope** and events route through a rebindable
+`uiSend`, so a reload reattaches to LIVE sessions (full memory, no replay);
+`ws.on('close')` no longer disposes anything. When a session genuinely died
+— server restart, or the 3-hour idle reaper that frees the hidden claude
+process — the next message is prefixed with `transcriptFor(chatId)` (newest
+turns win a 12k-char budget), **built BEFORE the current message is
+appended** so the question isn't in the story twice. The UI rebuilds every
+chat from `GET /api/chats` on boot; ✕ (close_chat) deletes the transcript —
+the one deliberate way to forget. The scary "memory was reset" reconnect
+line is gone because it stopped being true.
+
+Verified live on isolated dirs: codeword → `kill` the server → fresh boot →
+same chat asked → the codeword came back. Transcript held both roles on
+disk between the two.
+
+**Round 66 — copilot documents, attachments, model picker (2026-09-01).**
+
+All in the copilot project. **`lib/docs.js` is the write sandbox**: the
+session's ONLY writing goes through the `docs` MCP tools (save_document /
+list_documents / read_document); every name is flattened by `safeName`
+(basename only, no separators, controls or dotfiles) into
+`~/Documents/Browser Copilot` — override `COPILOT_DOCS_DIR` for rigs. The
+**Documents view** (third toggle) lists that folder; `/api/docs`,
+`/api/docs/content`, `/api/docs/open` (path always from `docPath`, never
+from the request). **Attachments**: paperclip → `/api/upload` (base64,
+20 MB cap, express json limit raised to 30mb) → stamped file under
+`attachments/` → the message header names the path → **the session now has
+the built-in `Read` tool** (the same tool Slate's hidden helpers use;
+Bash/Write/Edit stay disallowed), so text, images and PDFs all open. The
+server refuses attachment paths that are not existing files inside
+`ATTACH_DIR`, so a page script cannot point Claude's Read at an arbitrary
+path through the ws.
+
+**Model picker** (`lib/settings.js`, `~/.browser-copilot.json`, override
+`COPILOT_SETTINGS`): sonnet / opus / haiku, applied to sessions created
+after the change — the SDK takes the model at session start, so running
+chats keep theirs. **The per-turn cost line is gone from the UI** (the
+server still emits costUsd; the page just doesn't show it).
+
+Verified on the rig with one live haiku turn: attach a file carrying a
+random marker → Claude Reads it and save_documents `echo.txt` containing
+exactly that marker → listed and readable through the API. Plus model
+roundtrip and validation, and traversal-name refusal. `safeName` gotcha for
+later: the Write tool once turned ` -` escapes into RAW control
+bytes in the source — grep for them if the regex ever looks mangled.
+
+**Round 65 — the strip is gone; the dropdown drives the viewer
+(2026-09-01).**
+
+Will: "remove the pills at the top just make the dropdown thing from before
+work." The Tab view now has exactly one control: the **Working on dropdown
+pins both the chat and the viewer** to its tab (`view_tab` on change,
+`watch_tab` now carries the dropdown's tabId so the right tab is pinned
+from the first frame). Round 64's pin machinery is unchanged underneath —
+Opera never gets touched, hidden tabs show via live screenshots. The strip,
+the Follow pill and `view_follow` were removed; follow mode still exists
+inside `watchView` purely as the fallback when a pinned tab closes. The
+＋ New tab button went back to floating top-left of the viewer. Six
+dropdown-viewer checks green on the rig.
+
+**Round 64 — pinned viewing of hidden tabs; the strip means it now
+(2026-09-01).**
+
+Will, correctly: the round-63 strip "still just mirrors the tab I have open"
+— clicking a pill fronted the tab, so the viewer never showed anything but
+the front tab. **The discovery that unlocked the real thing:
+`Page.captureScreenshot` (fromSurface:true, the default) WORKS on a hidden
+tab and is LIVE — it re-renders the page on demand.** Measured in headful
+Chrome: capture, change the DOM, capture again → different bytes.
+(`fromSurface:false` errors; screencast on hidden tabs stays dead even with
+`setWebLifecycleState('active')` — both also measured.)
+
+**`watchView` in chrome.js replaces `watchActive`** (round 63's
+`watcher.front` and the `front_tab` message are gone): follow mode mirrors
+the front tab via screencast as before; a strip click sends `view_tab` →
+`watcher.pin(id)` — NO bringToFront, Opera is left alone — and the viewer
+images that tab by screencast when it is front or by an 800ms
+captureScreenshot loop when hidden (`Page.getLayoutMetrics` supplies the
+CSS-px meta for click mapping). `view_follow` unpins. A pinned tab that gets
+closed auto-unpins. Input still routes to `watcher.current()` — and CDP
+input works fine on hidden tabs, verified: typed into a pinned background
+tab while a different tab stayed front, all through the copilot's ws.
+`watching` events carry `pinned`; the strip's Follow pill lights on
+!pinned, the shown tab's pill on tabId.
+
+Nine pin checks green on the isolated rig (never against Will's browser —
+the round 63 rule).
+
+**Round 63 — the viewer grew a tab strip, and tests got isolated
+(2026-09-01).**
+
+Will: the mirror only shows the front tab, "I need it to show any tab". Any
+tab can only be SHOWN by fronting it (round 62's engine facts), so the viewer
+gained its own **tab strip**: `refreshStrip()` renders a pill per
+`/api/tabs` entry (mirrored one `.active`, ＋ New tab at the end, 3s refresh
+while the view is up), and clicking one sends `front_tab {tabId}` — the
+server calls `watcher.front(id)`, which brings the tab to front AND attaches
+the stream immediately instead of waiting for the 900ms poll. The dropdown
+still only pins the chat. Told Will plainly: the strip switches the real
+Opera window too; viewer and window are two screens of one browser.
+
+**THE HARNESS RULE THAT CAME OUT OF THIS ROUND: never drive input at the
+real copilot browser (9222) — it is Will's working browser.** A verify
+script clicked+typed "zz" mid-test exactly when Will fronted his live Slate
+tab, and the input followed the front tab into his real app (checked
+read-only afterwards: no draft, slide or title took damage — but that was
+luck, not design). `CDP_PORT` in chrome.js is now `COPILOT_CDP_PORT`-
+overridable, and the e2e scripts take `COPILOT_BASE`/`COPILOT_CDP` envs; the
+scratchpad's `run-isolated.js` boots a throwaway copilot server wired to a
+throwaway headless Chrome and runs any script against that pair. All six
+mirror checks green on the rig — the "failure" that started this was Will's
+own click racing the test, proven by the isolated pass.
+
+**Round 62 — the live view became a mirror of the active tab (2026-09-01).**
+
+Will: the dropdown "takes me to that tab", and the viewer freezes while "the
+actual website changes". Both were real, and the diagnosis matters for
+anything touching screencast:
+
+**Only the FRONT tab of a browser window produces screencast frames, and an
+OCCLUDED window produces none at all.** Measured directly: a DOM change on a
+front-but-covered tab yielded 0 frames; with
+`--disable-backgrounding-occluded-windows` + `--disable-renderer-backgrounding`
+on the launch args it yields frames again. A background (non-front) tab yields
+0 regardless — no flag changes that, it is simply never drawn. So a viewer
+pinned to one tabId is unfixable by design; the fix is architectural:
+
+**`watchActive` in chrome.js mirrors the window.** `activeTabId()` finds the
+composited tab (`document.visibilityState === 'visible'`, preferring
+`hasFocus()` when two windows qualify), streams it via the old `watchTab`
+(which LOST its `bringToFront` — that was the dropdown-yanking), and a 900ms
+poll re-attaches when the front tab changes, emitting `watching {tabId,
+title, url}` to the UI. The server routes viewer `input` events to
+`watcher.current()` — the UI no longer names a tabId for either frames or
+input. The dropdown is chat-pinning only; its label says "Working on".
+
+The `#tabName` pill (top-right of the viewer) names the mirrored tab.
+Verified end-to-end: mirror latches, follows a `json/new` tab, follows a
+tab-strip switch (`Page.bringToFront`), streams after each move, and typed
+input lands in whichever tab is front. Mirroring the Slate tab recurses
+(Slate → Copilot tab → mirror → …) — expected, harmless.
+
+**Round 61 — the copilot drives Opera, seeded with Will's real profile
+(2026-09-01).**
+
+Will asked for "my opera tabs". **The literal ask is impossible and will come
+back: Chromium 136+ refuses --remote-debugging-port on a DEFAULT profile, and
+Will's Opera 135 is Chromium 151** — his everyday Opera window can never be
+attached to, by this or any tool. Told him straight; what shipped is the
+nearest real thing: `launchChrome` picks Opera over Chrome (his install is
+`~/Applications/Opera.app` — NOT /Applications, that copy is John's; Will is
+not admin), VISIBLE again (headless dropped, round 60's invisible mode
+retired), on `~/.browser-copilot-opera`.
+
+**That profile is a one-time rsync of his real one** (`~/Library/Application
+Support/com.operasoftware.Opera`, caches and Singleton* excluded, copied live
+2026-09-01) — logins survive because the "Opera Safe Storage" keychain key is
+app-scoped, not profile-scoped, and Opera's saved session came with it: first
+launch restored his actual tabs (Slate, Canvas grades, Outlook, outreach).
+**The two profiles diverge from today** — a login done in one does not appear
+in the other.
+
+`browserName()` in chrome.js is the discovery ( Opera user-path → Opera
+system-path → Chrome), `/api/status` returns `browser`, and the UI labels
+itself from it ("Launch Opera"). No startUrl on launch — session restore
+brings the tabs. Streaming/click/type re-verified green against Opera.
 
 **Round 60 — invisible Chrome + New tab in the viewer (2026-08-31).**
 
@@ -2066,6 +2246,46 @@ Open, all offered and none refused — just not answered yet:
 - Will's instruction in a message IS approval.
 
 ## Activity Log
+- **2026-09-01 (round 67)** — Fixed the copilot forgetting conversations:
+  every Slate navigation reloaded its page and threw the sessions away.
+  Chats now persist to disk, rebuild in the UI after any reload, survive
+  server restarts (a fresh session is handed the story so far), and only ✕
+  forgets one. Proven by killing the server mid-conversation and getting the
+  codeword back from the reborn one.
+- **2026-09-01 (round 66)** — The copilot can make real documents now: Claude
+  writes files into a sandboxed "Browser Copilot" folder in Documents, shown
+  on a new Documents view with preview and Open. A paperclip sends Claude
+  files to read (text, images, PDFs), a header picker switches the model for
+  new chats, and the cost line is gone. Verified live: an attached file's
+  secret marker came back exactly in a document Claude saved.
+- **2026-09-01 (round 65)** — Took the pills back out: the Working on
+  dropdown is the viewer's one control, pinning both the chat and the view to
+  its tab with the same leave-Opera-alone machinery. New tab button returned
+  to the viewer's corner. Six checks green on the rig.
+- **2026-09-01 (round 64)** — The strip earned its place: clicking a pill now
+  pins the viewer to that tab without moving Opera at all — front tabs
+  stream, background tabs show live once-a-second screenshots (found that
+  screenshots re-render hidden tabs even though streaming can't), and input
+  lands in the pinned tab either way. A Follow pill restores the mirror.
+  Nine end-to-end checks green on the isolated rig.
+- **2026-09-01 (round 63)** — The viewer got a tab strip: a pill for every
+  open tab, click to show it (which fronts it in Opera too — only the front
+  tab draws, so that's what showing means), with the ＋ button on the end.
+  Test scripts now run against a throwaway copilot + headless browser pair
+  instead of the real one, after a test's typing chased Will's own click into
+  his live Slate tab (no harm done, verified read-only).
+- **2026-09-01 (round 62)** — Fixed both tab-viewer complaints: the dropdown
+  no longer flips the real Opera's tabs (it only pins the chat now), and the
+  viewer became a live mirror of whatever tab is front — following tab
+  switches automatically — with Opera launched so it keeps drawing while its
+  window sits behind Slate, which was the real cause of the freezing. Six new
+  end-to-end mirror checks green.
+- **2026-09-01 (round 61)** — The copilot switched from headless Chrome to a
+  visible Opera carrying a one-time copy of Will's real profile — logins,
+  bookmarks and his saved session included; its first launch brought his
+  actual tabs back. His everyday Opera window itself can't be attached to
+  (engine restriction since Chromium 136) and he was told so plainly. Chrome
+  stays as the fallback browser. All interaction checks re-run green on Opera.
 - **2026-08-31 (round 60)** — The copilot's Chrome runs invisibly now (Will's
   choice, offered both ways): no window anywhere, the clickable live view in
   Slate is the only place its tabs exist, same profile so logins persist. A

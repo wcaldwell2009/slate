@@ -1,5 +1,129 @@
 # What's been built — plain English
 
+## 2026-09-01 — The copilot stopped forgetting
+
+You caught a real bug: Claude's memory lived only inside a running process,
+and that process was thrown away far more often than it looked — every time
+you switched Slate tabs and came back, the copilot page reloaded and took
+every conversation with it (my own server updates today did it too). That's
+the "short term memory loss."
+
+Now the conversation itself lives on disk. Chats come back — bubbles and all
+— after a reload, a Slate tab switch, or a full restart, and when Claude's
+session has to start fresh it's quietly handed the story so far, so it picks
+up where you left off. Closing a chat with the ✕ is the one thing that
+actually forgets it, on purpose.
+
+Proved it the hard way: told Claude a codeword, killed the server outright,
+started a new one, asked the same chat — it answered with the codeword.
+
+(The chats from earlier today couldn't be saved retroactively — saving
+starts now.)
+
+## 2026-09-01 — The copilot makes documents, takes files, and picks its model
+
+Four things, all in the copilot:
+
+**Documents.** Ask Claude to write something up and it saves a real file —
+they land in a "Browser Copilot" folder inside your Documents, and there's a
+new **Documents** view next to Chat and Tab: the list on the left, the file
+on the right, and an Open button that hands it to the normal app for that
+type. Claude can also reread and update its own files. That folder is the
+ONLY place it can write — file names get flattened so nothing can escape it.
+
+**Send it files.** The paperclip next to the message box attaches anything up
+to 20 MB — text, images, PDFs — and Claude reads it with the next message.
+
+**Model picker.** The dropdown in the header switches between Sonnet, Opus
+and Haiku. The choice is remembered and applies to chats you start after
+changing it.
+
+**The cost line is gone** from under the message box.
+
+## 2026-09-01 — One control for the viewer: the dropdown
+
+The pills are gone. The **Working on** dropdown now does it all: pick a tab
+there and the viewer shows it (and the chat works on it). Same machinery
+underneath — Opera is never touched, background tabs show as live
+once-a-second pictures — and the ＋ New tab button is back in the corner of
+the viewer.
+
+## 2026-09-01 — The viewer really shows any tab now, without touching Opera
+
+You were right that the strip was pointless before — clicking a pill just
+switched Opera, so the viewer never showed anything but the tab you were on
+anyway. Found a way around the engine rule: a background tab can't stream
+video, but it CAN be photographed on demand, and the photo re-renders the
+page — so it's live.
+
+So now: **click any pill in the strip and the viewer pins to that tab, and
+Opera doesn't move at all.** If the tab you pin happens to be the front one,
+you get the smooth stream; if it's a background tab, the picture refreshes
+about once a second — still live, you can watch Claude type into it, and
+your own clicks and typing in the viewer land in it too.
+
+The **Follow** pill at the front of the strip is the old behavior: show
+whatever tab Opera has up front, and move when it moves. That's still the
+default until you pin something.
+
+## 2026-09-01 — A tab strip in the viewer: show any tab with one click
+
+The viewer now has its own tab strip across the top — one pill for every tab
+open in the copilot's Opera, with the one you're seeing lit up in sage, and
+the ＋ button on the end. Click any pill and the viewer shows that tab.
+
+One honest mechanic behind it: a browser only draws the tab at its front, so
+"show me that tab" means bringing it to the front in Opera too. The viewer
+and the Opera window are two screens of the same browser — switch in either
+place and the other follows within a second.
+
+Also from this round: verification scripts now run against their own private
+throwaway browser, never the copilot's real one — a test clicked into the
+live window once (nothing was harmed, and nothing like it can happen again).
+
+## 2026-09-01 — The tab viewer is a mirror now, and it doesn't freeze
+
+Two problems you reported, both fixed:
+
+**Picking a tab in the dropdown yanked your real Opera over to it.** That was
+the viewer forcing tabs forward so it could film them — needed when the
+browser was invisible, wrong now that it's your real window. Gone. The
+dropdown now only means "which tab is this chat working on" and never touches
+your window.
+
+**The viewer froze while the real page kept changing.** Two engine facts were
+behind it: a browser only draws the tab that's at the front, and it stops
+drawing entirely when its window is covered by another app (like Slate). So
+the viewer now works like a mirror: **it always shows whatever tab is at the
+front of the copilot's Opera and follows along when you switch** — click a
+different tab in Opera, open a link in a new tab, let Claude switch tabs, and
+the picture follows. And Opera is launched with the setting that keeps it
+drawing even when its window is buried, so the mirror stays live while you're
+looking at Slate. A little pill in the corner names the tab you're seeing.
+
+(One quirk: mirror the Slate tab itself and you get an infinite tunnel of
+Slates. Harmless, slightly great.)
+
+## 2026-09-01 — The copilot uses Opera now, with your own stuff in it
+
+You asked for it to see the tabs in your everyday Opera. The one thing no tool
+can do: attach to a browser's normal profile — Opera runs on the same engine
+as Chrome, and the engine refuses that outright since version 136. So this is
+the closest real thing, and it's close:
+
+**The copilot now launches its own Opera — a real, visible window — loaded
+with a one-time copy of your actual profile.** Your logins, bookmarks,
+settings, and your saved session all came along: when it first opened it
+brought back Slate, your Canvas grades, your Outlook inbox and your outreach
+tabs on its own. Browse in that window while you're using the tool and the
+copilot sees every tab; or don't touch it at all and drive it from the Tab
+view in Slate, which still works exactly the same (live, clickable).
+
+The invisible Chrome from yesterday is retired (Chrome remains the automatic
+fallback on a machine with no Opera). One note: the profile copy was taken
+today — anything you log into later, do it once in either window and it'll be
+remembered there.
+
 ## 2026-08-31 — Invisible Chrome + a New tab button in the viewer
 
 Two things, both your asks:
