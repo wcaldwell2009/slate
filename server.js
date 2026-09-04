@@ -106,15 +106,48 @@ app.post('/api/new-tab', async (req, res) => {
   }
 });
 
+// `startUrl` (http/https only) is the page to open in the launched browser —
+// Slate passes its own address when it hosts the copilot, so one Launch gives
+// Will a window that has Slate AND his tabs, and everything he does in that
+// window is what the copilot sees. His everyday Opera can never be attached
+// to (Chromium 136+ refuses remote debugging on a default profile), so the
+// copilot's window has to BE the everyday one; this is what makes that easy.
+function startUrlFrom(body) {
+  const u = body && typeof body.startUrl === 'string' ? body.startUrl.trim() : '';
+  return /^https?:\/\//i.test(u) ? u : null;
+}
+// Open `url` in the copilot browser unless a tab already has it. Session
+// restore brings Will's old tabs back — Slate included, once he's used it
+// there — so launching WITH the url as an argument made a second Slate tab.
+async function ensureTab(url) {
+  if (!url) return;
+  try {
+    const want = url.replace(/\/+$/, '');
+    const tabs = await chrome.listTabs();
+    if (!tabs.some((t) => t.url.replace(/\/+$/, '') === want)) await chrome.openTab(url);
+  } catch { /* the tab is a nicety; the launch itself already succeeded */ }
+}
 app.post('/api/launch-chrome', async (req, res) => {
-  if (await chrome.isChromeUp()) return res.json({ ok: true, alreadyRunning: true });
-  chrome.launchChrome();
-  // Give Chrome a few seconds to expose the DevTools port.
-  for (let i = 0; i < 20; i++) {
-    await new Promise((r) => setTimeout(r, 500));
-    if (await chrome.isChromeUp()) return res.json({ ok: true });
+  const startUrl = startUrlFrom(req.body);
+  if (await chrome.isChromeUp()) {
+    await ensureTab(startUrl);
+    return res.json({ ok: true, alreadyRunning: true });
   }
-  res.json({ ok: false, error: `${chrome.browserName()} did not come up on the DevTools port. If a copilot browser window is already open from before, close it and try again.` });
+  chrome.launchChrome();
+  // Wait for the DevTools port. A cold Opera with Will's profile (session
+  // restore, extensions) takes 15-30s on his Mac; the old 10s cap reported
+  // "did not come up" while it was still coming up.
+  for (let i = 0; i < 90; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (await chrome.isChromeUp()) {
+      // Give session restore a moment to list its tabs before deciding
+      // whether the start page is missing.
+      await new Promise((r) => setTimeout(r, 1500));
+      await ensureTab(startUrl);
+      return res.json({ ok: true });
+    }
+  }
+  res.json({ ok: false, error: `${chrome.browserName()} did not come up on the DevTools port after 45s. If a copilot browser window is already open from before, close it and try again.` });
 });
 
 const server = http.createServer(app);

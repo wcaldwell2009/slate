@@ -774,10 +774,24 @@ async function checkChrome() {
   }
 }
 
+// When the copilot is framed inside Slate, the referrer is Slate's own
+// address; launching with it opens Slate in the copilot's browser too, so
+// that window can be the one Will actually uses.
+function hostUrl() {
+  try {
+    if (window.top === window || !document.referrer) return null;
+    return new URL(document.referrer).origin + '/';
+  } catch { return null; }
+}
+
 $('launchChrome').onclick = async () => {
   $('launchChrome').disabled = true;
   $('launchChrome').textContent = 'Launching…';
-  const res = await fetch('/api/launch-chrome', { method: 'POST' }).then((r) => r.json());
+  const res = await fetch('/api/launch-chrome', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ startUrl: hostUrl() }),
+  }).then((r) => r.json());
   $('launchChrome').disabled = false;
   $('launchChrome').textContent = `Launch ${browserName}`;
   if (!res.ok) alert(res.error || `Could not launch ${browserName}`);
