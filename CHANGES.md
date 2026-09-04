@@ -1,5 +1,18 @@
 # What's been built — plain English
 
+## 2026-09-04 — Launch Opera works again, and it brings Slate with it
+
+Pressing Launch Opera was showing an error and then nothing. Two things:
+the two programs behind Slate had been started in a way that stopped them
+from opening Opera at all (both restarted properly), and the button gave up
+after ten seconds when Opera on your profile takes about thirty to wake up.
+It now waits long enough.
+
+The window Launch Opera opens now has Slate in it too. That window is the
+one the copilot can see, so use it for school: the tabs there are the tabs
+it reads. Your other Opera window is one the copilot can never look into —
+that's a browser rule, not a Slate one.
+
 ## 2026-09-02 — Click away, click back, nothing moves
 
 Yesterday's fix brought the conversations back after you left the Copilot

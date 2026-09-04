@@ -1,7 +1,7 @@
 # Slate — School Tracker App — Project Handoff
 
 ## Last Updated
-2026-09-02 (round 68 — copilot restores tab pins, view and open chat on reload)
+2026-09-04 (round 69 — copilot launch fixed; Launch Opera opens Slate in that window)
 
 ## What this project is
 Slate is a **local desktop app** that helps Will keep on top of school work. It
@@ -228,6 +228,55 @@ in the prompt as the student's work to critique, never to improve.
 Node (here, inserting a conversation straight into the shots database) before
 the page is photographed, because that server runs with `SLATE_NO_AI=1` and
 cannot have a conversation of its own.
+
+**Round 69 — "Launch Opera" errored; the servers were the problem
+(2026-09-04).**
+
+Will: press Launch Opera, it loads, an error, nothing happens. Two causes,
+both real:
+
+**1. BOTH SERVERS HAD BEEN STARTED FROM A CLAUDE CODE SESSION, AND OPERA
+WILL NOT START FROM A CHILD OF ONE.** Slate on 4173 (started Aug 31) and the
+copilot on 4321 (Sep 2) were still carrying that session's environment
+(`CLAUDECODE=1`, `CLAUDE_CODE_*`, and whatever sandboxing that shell had).
+The copilot's `launchChrome` spawn from that process never produced a
+listening Opera at all; the byte-identical spawn from a fresh shell had the
+DevTools port up in a second. **Rule: never leave Will's real servers
+running as children of a Claude Code Bash.** Start them the way he does
+(`npm start` from Terminal), or from a Bash with the sandbox off and every
+`CLAUDE*` variable stripped (`env -u CLAUDECODE -u CLAUDE_CODE_... node
+server.js`, which is how both were restarted this round). Same trap would
+bite Slate's own `open`/`claude -p` spawns. If Launch ever fails again
+while a hand launch works, check the server's parent and env first
+(`ps -E -p <pid>`).
+
+**2. The launch route waited 10s; a cold Opera on Will's profile takes
+~30s.** Measured twice: 31s and 33s to the DevTools port (session restore
+plus extensions). So even a healthy server would have shown the error
+while Opera was still coming up, and then Opera appeared "on its own".
+`/api/launch-chrome` now waits up to 45s.
+
+**Launch Opera now opens Slate in the copilot's window.** Will's ask was
+"read the tabs I have open in the same Opera I'm using Slate in". His
+everyday Opera window still cannot be attached to (round 61: Chromium
+136+ refuses remote debugging on a default profile; his is Chromium 151),
+so the nearest real thing is making the copilot's window the one he uses.
+The copilot page sends `startUrl: document.referrer origin` when it is
+framed (that is Slate's address), and the route opens it — `ensureTab()`
+only if no tab already has that URL, checked 1.5s after the port is up so
+session restore has listed its tabs first. Passing the URL as a launch
+argument made a SECOND Slate tab because restore brought the old one back;
+that is why it is a post-launch check. `startUrl` is http(s) only.
+
+Verified: live chat turn through the ws answered "PONG"; warm launch with
+Slate already open added nothing; cold launch produced exactly one Slate
+tab among his restored ones; the Copilot tab photographed inside that Opera
+shows connected, green dot, Slate in the Working-on dropdown.
+
+**What Will needs to know:** do schoolwork in the Opera window that Launch
+Opera opens (it has Slate and his tabs). Anything in his other Opera window
+is invisible to the copilot and always will be, short of rebuilding the
+copilot as an Opera extension.
 
 **Round 68 — full state restore across the iframe reload (2026-09-02).**
 
@@ -2178,6 +2227,10 @@ against. Not started yet.
   everything still works. Wire the real API when he says go. Stored in `.env`.
 
 ## Next Recommended Step
+**Both servers are running clean as of 2026-09-04** (Slate 4173, copilot
+4321, copilot Opera up on 9222 with Slate open in it). If either is
+restarted from a Claude Code session, strip the env — see round 69.
+
 **Will is setting the copilot up on his Windows PC** (2026-09-02). He was
 given the steps: clone `wcaldwell2009/browser-copilot` into
 `Desktop\Browser Copilot\browser-copilot`, `npm install` there, then in the
@@ -2273,6 +2326,13 @@ Open, all offered and none refused — just not answered yet:
 - Will's instruction in a message IS approval.
 
 ## Activity Log
+- **2026-09-04 (round 69)** — Launch Opera was failing: both servers had
+  been left running as children of an old Claude Code session and Opera
+  would not start from them, and the launch gave up after 10s when a cold
+  Opera needs ~30s. Restarted both clean, wait is 45s now, and Launch Opera
+  opens Slate inside the copilot's window so it can be the one Will works
+  in. Verified with a live chat turn, warm and cold launches, and a
+  screenshot of the Copilot tab inside that Opera.
 - **2026-09-02 (round 68)** — Clicking off the Copilot tab and back now lands
   exactly where you were: each chat remembers which browser tab it was
   pinned to (stored with the transcript), and the open chat + current view
