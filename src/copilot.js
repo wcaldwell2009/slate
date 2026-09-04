@@ -18,9 +18,20 @@ const { spawn } = require('child_process');
 
 // Env overrides exist for the harnesses (and for the Windows machine, where
 // the folder will live somewhere else if it ever comes over).
+// Since 2026-09-04 the copilot lives INSIDE this repo (browser-copilot/,
+// brought in with its history) so one clone carries both. The old Desktop
+// folder is kept as a fallback for a machine that still has it there.
 function copilotDir() {
-  return process.env.SLATE_COPILOT_DIR
-    || path.join(os.homedir(), 'Desktop', 'Browser Copilot', 'browser-copilot');
+  if (process.env.SLATE_COPILOT_DIR) return process.env.SLATE_COPILOT_DIR;
+  const candidates = [
+    path.join(__dirname, '..', 'browser-copilot'),
+    path.join(os.homedir(), 'Desktop', 'School Tracker', 'browser-copilot'),
+    path.join(os.homedir(), 'Desktop', 'Browser Copilot', 'browser-copilot'),
+  ];
+  for (const c of candidates) {
+    try { if (fs.existsSync(path.join(c, 'server.js'))) return c; } catch { /* keep looking */ }
+  }
+  return candidates[0];
 }
 function copilotUrl() {
   return (process.env.SLATE_COPILOT_URL || 'http://localhost:4321').replace(/\/+$/, '');

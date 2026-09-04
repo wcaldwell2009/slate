@@ -74,16 +74,17 @@ your heading filled in.
 
 ## The Copilot tab
 
-The **Copilot** tab hosts [Browser Copilot](https://github.com/wcaldwell2009/browser-copilot)
-— a separate project that lives in its own folder and runs its own little
-server. It's a chat with Claude that drives its own browser window (Opera,
+The **Copilot** tab hosts Browser Copilot — a separate program that lives in its own folder here and
+runs its own little server. It's a chat with Claude that drives its own browser window (Opera,
 falling back to Chrome or Edge): it reads pages, fills forms in, makes
 documents, and shows a live, clickable view of any tab right inside Slate.
 Conversations are saved on disk and survive reloads and restarts.
 
-To set it up on a machine, clone that repo into a `Browser Copilot/browser-copilot`
-folder on the Desktop (that's where Slate looks — or set `SLATE_COPILOT_DIR`),
-run `npm install` in it once, then use the Start button on the Copilot tab.
+It lives in this repo as `browser-copilot/` (since 2026-09-04, with its
+history), so a clone of Slate already has it. Run `npm install` inside
+`browser-copilot/` once, then use the Start button on the Copilot tab. Slate
+also looks in the old `Desktop/Browser Copilot/browser-copilot` folder, or
+wherever `SLATE_COPILOT_DIR` points.
 It needs a logged-in Claude Code. Slate and the copilot share no data — the
 tab just frames it.
 

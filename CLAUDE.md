@@ -273,6 +273,24 @@ Slate already open added nothing; cold launch produced exactly one Slate
 tab among his restored ones; the Copilot tab photographed inside that Opera
 shows connected, green dot, Slate in the Working-on dropdown.
 
+**Round 69b — the copilot moved INTO this repo (2026-09-04).** Will: "put it
+in the same repo." `browser-copilot/` is now a folder of the Slate repo,
+brought in with `git subtree add` so its commit history came along. **It is
+still its own program** (own package.json, own node_modules — gitignored by
+the root `.gitignore`'s `node_modules/`; round 58's "stays its own app"
+design is unchanged, Slate's own package.json still has zero deps).
+`copilotDir()` in src/copilot.js now tries `<repo>/browser-copilot` first,
+then `~/Desktop/School Tracker/browser-copilot`, then the old
+`~/Desktop/Browser Copilot/browser-copilot`, then `SLATE_COPILOT_DIR` wins
+over all of them. The running copilot on 4321 was restarted from the new
+folder. **The old Desktop folder and the separate
+`wcaldwell2009/browser-copilot` GitHub repo are now stale copies** — left in
+place, not deleted; edits go in `browser-copilot/` here from now on. The
+installer's build.js does NOT copy browser-copilot into `dist/slate-app`
+(the installed Windows app finds it via the Desktop/SLATE_COPILOT_DIR
+paths); on Will's PC the step is `git pull` then `npm install` inside
+`browser-copilot`.
+
 **What Will needs to know:** do schoolwork in the Opera window that Launch
 Opera opens (it has Slate and his tabs). Anything in his other Opera window
 is invisible to the copilot and always will be, short of rebuilding the
@@ -2231,10 +2249,11 @@ against. Not started yet.
 4321, copilot Opera up on 9222 with Slate open in it). If either is
 restarted from a Claude Code session, strip the env — see round 69.
 
-**Will is setting the copilot up on his Windows PC** (2026-09-02). He was
-given the steps: clone `wcaldwell2009/browser-copilot` into
-`Desktop\Browser Copilot\browser-copilot`, `npm install` there, then in the
-Slate workshop `git pull` + `npm run push` to update the installed app. The
+**Will is setting the copilot up on his Windows PC** (2026-09-02). As of
+round 69b the steps are: in the Slate workshop `git pull`, then
+`npm install` inside `browser-copilot\`, then `npm run push` to update the
+installed app (the separate clone he was told about before is no longer
+needed). The
 copilot's Windows browser paths and openers were added in round 68's push —
 untested on real Windows, so if he reports the Copilot tab not finding
 Opera there, `lib/chrome.js`'s BROWSERS list is where to look. On the Mac
