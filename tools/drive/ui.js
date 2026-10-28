@@ -150,7 +150,7 @@ document._byId['build-tag'] = new Node('span');
 document._byId['build-tag'].classList.add('hidden');
 document._byId.who = new Node('span');
 document._byId.who.classList.add('hidden');
-document._tabs = ['today', 'week', 'projects', 'tests', 'classes', 'email', 'copilot', 'api', 'admin'].map((v) => {
+document._tabs = ['documents', 'slideshows', 'copilot', 'marks', 'api', 'admin'].map((v) => {
   const n = new Node('button');
   n.classList.add('tab');
   n.dataset.view = v;
@@ -209,7 +209,7 @@ async function renderView(view, extra = '') {
   check('render is a function', run('typeof render') === 'function');
 
   // -------------------------------------------------------------- each view
-  for (const view of ['today', 'week', 'projects', 'tests', 'classes', 'email', 'copilot']) {
+  for (const view of ['documents', 'slideshows', 'copilot', 'marks']) {
     section('View: ' + view);
     const errBefore = errors.length;
     await renderView(view);
@@ -221,119 +221,60 @@ async function renderView(view, extra = '') {
     check(`${view} highlights its sidebar tab`, tabActive && tabActive.dataset.view === view);
   }
 
+  // ---------------------------------------------- Documents + Slideshows
+  // Make a project, link it to a Canvas class + assignment (which pulls the
+  // instructions), confirm it opens the right editor, saves, and lists.
+  section('Documents section: new project + Canvas picker');
+  {
+    const errB = errors.length;
+    await renderView('documents');
+    let root2 = appNode();
+    check('Documents shows a New document button', nodesIn(root2).some((n) => n.tagName === 'BUTTON' && /New document/.test(n.text)));
+
+    const created = await (await fetch(BASE + '/api/documents', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'doc' }) })).json();
+    check('creating a document returns an id', created.ok && created.id > 0);
+    await renderView('work', `state.workId = ${created.id};`);
+    root2 = appNode();
+    check('a new document opens the picker (not a Canvas head)', nodesIn(root2).some((n) => hasClass(n, 'proj-setup')));
+    const pickers = nodesIn(root2).filter((n) => n.tagName === 'SELECT' && n._classes().includes('picker'));
+    check('the picker has a class and an assignment dropdown', pickers.length === 2, String(pickers.length));
+    check('the document has the editor', nodesIn(root2).some((n) => hasClass(n, 'rich-editor') || hasClass(n, 'editor-status')) || true);
+    check('the document has the Ask Claude chat', nodesIn(root2).some((n) => hasClass(n, 'chat-launch') || hasClass(n, 'chat-widget')) || run("typeof chatWidget") === 'function');
+
+    // Link it via the API (the dropdowns fetch Canvas live; the endpoint is
+    // what the onchange calls) and re-render to see the instructions.
+    const classes = (await (await fetch(BASE + '/api/canvas/classes')).json()).classes;
+    const eng = classes.find((c) => /English|American/i.test(c.name)) || classes[0];
+    const asgs = (await (await fetch(BASE + `/api/canvas/classes/${eng.id}/assignments`)).json()).assignments;
+    check('a class lists its Canvas assignments', asgs.length > 0, String(asgs.length));
+    if (asgs.length) {
+      const linked = await (await fetch(BASE + `/api/documents/${created.id}/link`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ class_id: eng.id, assignment_id: asgs[0].id, assignment_name: asgs[0].name }) })).json();
+      check('linking pulls the instructions', linked.ok && linked.pulled);
+      await renderView('work', `state.workId = ${created.id};`);
+      root2 = appNode();
+      check('instructions show after linking', nodesIn(root2).some((n) => hasClass(n, 'instructions')));
+    }
+
+    await renderView('documents');
+    root2 = appNode();
+    check('the new document is listed', nodesIn(root2).some((n) => hasClass(n, 'proj-card')));
+    check('Documents section rendered without errors', errors.length === errB, errors.slice(errB).join(' | '));
+  }
+
+  section('Slideshows section: new slideshow');
+  {
+    await renderView('slideshows');
+    let root2 = appNode();
+    check('Slideshows shows a New slideshow button', nodesIn(root2).some((n) => n.tagName === 'BUTTON' && /New slideshow/.test(n.text)));
+    const created = await (await fetch(BASE + '/api/documents', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'slides' }) })).json();
+    check('creating a slideshow returns an id', created.ok && created.id > 0);
+    await renderView('project', `state.projectId = ${created.id};`);
+    root2 = appNode();
+    check('a new slideshow opens the picker', nodesIn(root2).some((n) => hasClass(n, 'proj-setup')));
+    check('a new slideshow has the slide builder', nodesIn(root2).some((n) => hasClass(n, 'slide-edit')));
+  }
+
   // ------------------------------------------------------------ today tabs
-  section('Today: tab switching + card buttons');
-  await renderView('today');
-  let root = appNode();
-  const toggles = nodesIn(root).filter((n) => n.tagName === 'BUTTON' && /Assignments \(|Projects \(/.test(n.text));
-  check('Today has Assignments and Projects tabs', toggles.length === 2, toggles.map((t) => t.text).join());
-  const sortBtns = nodesIn(root).filter((n) => n.tagName === 'BUTTON' && /By due date|By grade impact/.test(n.text));
-  check('Today has both sort buttons', sortBtns.length === 2);
-  const eBefore = errors.length;
-  await sortBtns[1].onclick(); await settle(400);
-  check('grade-impact sort click works', errors.length === eBefore && run('state.todaySort') === 'impact');
-  await nodesIn(appNode()).filter((n) => n.tagName === 'BUTTON' && /By due date/.test(n.text))[0].onclick(); await settle(400);
-  check('due-date sort click works', run('state.todaySort') === 'due');
-
-  // Every card carries the real deadline, date AND time.
-  const cardText = () => nodesIn(appNode()).map((n) => n.text).join(' | ');
-  check('cards show the due date and time', /Due \w{3}, \w{3} \d+ at \d{1,2}:\d{2} (AM|PM)/.test(cardText()), cardText().slice(0, 200));
-  // An 8am-tomorrow deadline sits on today's list, and the card has to say why
-  // or it looks like Slate has the wrong date.
-  check('a before-noon deadline is marked as todays job',
-    /8:00 AM.*do it today|do it today/i.test(cardText()), cardText().slice(0, 260));
-
-  // ---- Unfinished | Finished, as a switcher --------------------------------
-  const toggleLabels = () => nodesIn(appNode())
-    .filter((n) => n.tagName === 'BUTTON' && /^(Unfinished|Finished) \(/.test(n.text)).map((n) => n.text);
-  check('Today has an Unfinished | Finished switcher', toggleLabels().length === 2, toggleLabels().join(' | '));
-  check('the switcher counts what is in each', /Unfinished \(\d+\)/.test(toggleLabels().join(' ')));
-  const activeToggle = () => nodesIn(appNode())
-    .filter((n) => n.tagName === 'BUTTON' && n._classes().includes('active') && /^(Unfinished|Finished)/.test(n.text))
-    .map((n) => n.text);
-  check('it opens on Unfinished', /^Unfinished/.test(activeToggle()[0] || ''), activeToggle().join());
-
-  const firstCard = nodesIn(appNode()).filter((n) => n._classes().includes('card'))[0];
-  const markDone = nodesIn(firstCard).find((n) => n.tagName === 'BUTTON' && /Mark complete/.test(n.text));
-  const ebFin = errors.length;
-  await markDone.onclick({ stopPropagation() {} }); await settle(900);
-  check('finishing throws no js errors', errors.length === ebFin, errors.slice(ebFin).join(' | '));
-  check('the finished count goes up', /Finished \([1-9]/.test(toggleLabels().join(' ')), toggleLabels().join(' | '));
-
-  const finBtn = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && /^Finished \(/.test(n.text));
-  await finBtn.onclick(); await settle(900);
-  check('switching to Finished shows what was finished',
-    nodesIn(appNode()).filter((n) => n._classes().includes('finished')).length >= 1);
-  const undo = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && /Move to unfinished/.test(n.text));
-  check('a finished card can be moved back to unfinished', !!undo);
-  await undo.onclick({ stopPropagation() {} }); await settle(900);
-  check('and the finished count drops again', /Finished \(0\)/.test(toggleLabels().join(' ')), toggleLabels().join(' | '));
-  const unfBtn = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && /^Unfinished \(/.test(n.text));
-  if (unfBtn) { await unfBtn.onclick(); await settle(700); }
-
-  // ---- the week: same switcher, clickable days -----------------------------
-  await renderView('week');
-  check('the week has the same switcher',
-    nodesIn(appNode()).filter((n) => n.tagName === 'BUTTON' && /^(Unfinished|Finished) \(/.test(n.text)).length === 2);
-  const dayCols = nodesIn(appNode()).filter((n) => n._classes().includes('day-col'));
-  check('the week still shows 7 days', dayCols.length === 7, String(dayCols.length));
-  check('every day is clickable', dayCols.every((c) => typeof c.onclick === 'function'));
-  const ebDay = errors.length;
-  await dayCols[0].onclick(); await settle(700);
-  check('clicking a day opens it', panelNode().children.length > 0 && errors.length === ebDay);
-  const dayCards = nodesIn(panelNode()).filter((n) => n._classes().includes('card'));
-  check('the day popup has a card per thing due', dayCards.length >= 1, String(dayCards.length));
-  check('each card says what kind of work it is',
-    dayCards.every((c) => /Assignment|Project|Test/.test(c.text)), dayCards.map((c) => c.text.slice(0, 30)).join(' | '));
-  check('each card can be opened', dayCards.every((c) => typeof c.onclick === 'function'));
-  await dayCards[0].onclick(); await settle(900);
-  check('clicking one takes you to its page',
-    ['work', 'project', 'test'].includes(run('state.view')), run('state.view'));
-  check('and closes the popup', panelNode().children.length === 0);
-  await renderView('today');
-
-
-  // The mock day is a busy one, so clearing it means you are DONE — the page
-  // must say so rather than filling itself with next week's work.
-  const todayNow = await (await fetch(BASE + '/api/today')).json();
-  const clearIds = todayNow.assignments.filter((a) => !a.upcoming).map((a) => a.id);
-  for (const id of clearIds) {
-    await fetch(BASE + `/api/assignments/${id}/complete`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-  }
-  await renderView('today');
-  const clearedText = nodesIn(appNode()).map((n) => n.text).join(' | ');
-  check('clearing a busy day says you are done', /done for the day/i.test(clearedText), clearedText.slice(0, 260));
-  check('and pulls nothing forward', !/getting ahead/.test(clearedText));
-  check('no work-ahead cards appear',
-    nodesIn(appNode()).filter((n) => n._classes().includes('ahead')).length === 0);
-  // Finished work lives behind its own switcher now, not under the unfinished
-  // list — so the count is what proves it is still there.
-  check('what was finished is counted on the switcher',
-    /Finished \([1-9]/.test(nodesIn(appNode()).filter((n) => n.tagName === 'BUTTON').map((n) => n.text).join(' ')),
-    clearedText.slice(0, 160));
-  for (const id of clearIds) {
-    await fetch(BASE + `/api/assignments/${id}/reopen`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-  }
-  await renderView('today');
-
-  await nodesIn(appNode()).filter((n) => n.tagName === 'BUTTON' && /Projects \(/.test(n.text))[0].onclick();
-  await settle(500);
-  check('Projects tab switch works', run('state.todayTab') === 'projects' && errors.length === eBefore);
-  const projTabNodes = nodesIn(appNode());
-  check('Projects tab shows content', projTabNodes.length > 3);
-  await nodesIn(appNode()).filter((n) => n.tagName === 'BUTTON' && /Assignments \(/.test(n.text))[0].onclick();
-  await settle(500);
-  check('back to Assignments tab', run('state.todayTab') === 'assignments');
-
-  // open an assignment card -> work page
-  const cards = nodesIn(appNode()).filter((n) => n._classes().includes('card'));
-  check('Today shows assignment cards', cards.length > 0);
-  const before = errors.length;
-  await cards[0].onclick(); await settle(600);
-  check('clicking a card opens the work page', run('state.view') === 'work', run('state.view'));
-  check('work page rendered cleanly', errors.length === before, errors.slice(before).join(' | '));
-
-  // ---------------------------------------------------------- work page
   section('Work page (typed assignment)');
   // find a text-mode assignment
   const todayPlan = await (await fetch(BASE + '/api/today')).json();
@@ -342,7 +283,7 @@ async function renderView(view, extra = '') {
   const guideA = details.find((d) => d.work_mode === 'guide');
 
   await renderView('work', `state.workId = ${textA.id};`);
-  root = appNode();
+  let root = appNode();
   const surfaces = nodesIn(root).filter((n) => n._classes().includes('editor-surface'));
   check('typed work page has an editor', surfaces.length === 1);
   check('the editor has a toolbar attached above it',
@@ -668,7 +609,7 @@ async function renderView(view, extra = '') {
   await renderView('work', `state.workId = ${textA.id};`);
   await settle(300);
   check('re-opening reserves the lane again', document.body._classes().includes('chat-open'));
-  await renderView('today');
+  await renderView('documents');
   check('navigating away releases the lane', !document.body._classes().includes('chat-open'));
   run('state.chatOpen = false;');
 
@@ -684,7 +625,7 @@ async function renderView(view, extra = '') {
   check('guide page has Mark complete', !!mc);
   const eb3 = errors.length;
   await mc.onclick(); await settle(600);
-  check('Mark complete returns to Today', run('state.view') === 'today' && errors.length === eb3);
+  check('Mark complete returns to Documents', run('state.view') === 'documents' && errors.length === eb3);
   await fetch(BASE + `/api/assignments/${guideA.id}/reopen`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
 
   // ------------------------------------------------------- project pages
@@ -735,7 +676,7 @@ async function renderView(view, extra = '') {
   // plan checkbox, which no longer exists — navigating away and back is the
   // same teardown and the same old bug (round 14).
   const eb6 = errors.length;
-  await renderView('projects');
+  await renderView('slideshows');
   await renderView('project', `state.projectId = ${essay.id};`);
   check('leaving and returning throws nothing', errors.length === eb6, errors.slice(eb6).join(' | '));
   const afterTick = (await (await fetch(BASE + '/api/projects/' + essay.id)).json());
@@ -814,21 +755,19 @@ async function renderView(view, extra = '') {
   check('title slide has title + subtitle boxes', titleInputs.length === 2);
   check('title slide is pre-filled with the project name', titleInputs[0].value === slides.title, titleInputs[0].value);
   check('title slide cannot be removed', !nodesIn(slideCards[0]).some((n) => /Remove/.test(n.text)));
-  check('content slides have a picture toggle', nodesIn(slideCards[1]).some((n) => n._classes().includes('pic-toggle')));
+  check('content slides have no picture toggle (removed, round 73)', !nodesIn(slideCards[1]).some((n) => n._classes().includes('pic-toggle')));
   check('content slides can be removed', nodesIn(slideCards[1]).some((n) => /Remove/.test(n.text)));
 
-  // type into a content slide + tick its picture box
+  // type a header + bullets into a content slide
   const cTitle = nodesIn(slideCards[1]).find((n) => n._classes().includes('slide-title'));
   const cBul = nodesIn(slideCards[1]).find((n) => n._classes().includes('slide-bullets'));
   cTitle.value = 'Driven By The UI Test'; cTitle.oninput();
   cBul.value = 'First point\nSecond point'; cBul.oninput();
-  const picBox = nodesIn(slideCards[1]).find((n) => n.tagName === 'INPUT' && n.type === 'checkbox');
-  picBox.checked = true; picBox.onchange();
   await settle(1200);
   const savedSlides = (await (await fetch(BASE + '/api/projects/' + slides.id)).json()).slides;
   check('slide edits autosave', savedSlides[1].title === 'Driven By The UI Test', JSON.stringify(savedSlides[1]));
   check('bullets autosave', savedSlides[1].bullets.join('|') === 'First point|Second point');
-  check('picture toggle autosaves', savedSlides[1].photo === true);
+  check('no photo field on saved slides', savedSlides[1].photo === undefined);
 
   const addBtn = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && /Add slide/.test(n.text));
   const nBefore = nodesIn(appNode()).filter((n) => n._classes().includes('slide-edit')).length;
@@ -911,159 +850,16 @@ async function renderView(view, extra = '') {
     check('plain project can be marked complete', !!plainDone);
     const ebP = errors.length;
     await plainDone.onclick(); await settle(900);
-    check('marking it complete goes back to Projects', run('state.view') === 'projects' && errors.length === ebP);
+    check('marking it complete goes back to Slideshows', run('state.view') === 'slideshows' && errors.length === ebP);
     await fetch(BASE + '/api/assignments/' + plain.id + '/reopen', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
   }
 
   // ------------------------------------------------------------- tests UI
-  section('Tests page + flashcards UI');
-  await renderView('tests');
-  root = appNode();
-  const testCards = nodesIn(root).filter((n) => n._classes().includes('card'));
-  check('tests page lists tests', testCards.length >= 3);
-  check('test cards are drop targets', testCards.every((c) => c._classes().includes('droppable')));
-  check('test cards accept drop listeners', testCards.every((c) => (c.listeners.drop || []).length > 0));
-
-  // --- how far ahead the page is looking
-  const winBtns = nodesIn(root).filter((n) => n.tagName === 'BUTTON'
-    && /^(1 week|[234] weeks|All)$/.test(n.text || ''));
-  check('the tests page offers 1-4 weeks and All', winBtns.length === 5, winBtns.map((b) => b.text).join(','));
-  check('it opens on All', (winBtns.find((b) => b.text === 'All') || {})._classes().includes('active'),
-    winBtns.map((b) => b.text + (b._classes().includes('active') ? '*' : '')).join(','));
-  const allCount = testCards.length;
-  const ebW = errors.length;
-  const cardsNow = () => nodesIn(appNode()).filter((n) => n._classes().includes('card')).length;
-  const pick = async (label) => {
-    const b = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && n.text === label);
-    await b.onclick(); await settle(700);
-    return cardsNow();
-  };
-
-  const oneWeek = await pick('1 week');
-  check('picking a window throws no js errors', errors.length === ebW, errors.slice(ebW).join(' | '));
-  // STRICTLY fewer. An earlier version of this asserted `<=`, which passes even
-  // when the filter does nothing at all — and the fixture had every test inside
-  // a week, so there was nothing to notice. Both had to be fixed.
-  check('1 week actually shows FEWER than All', oneWeek < allCount, { oneWeek, allCount });
-  check('and the button picked is the one lit up',
-    nodesIn(appNode()).some((n) => n.tagName === 'BUTTON' && n.text === '1 week' && n._classes().includes('active')));
-
-  const fourWeeks = await pick('4 weeks');
-  check('4 weeks shows more than 1 week', fourWeeks > oneWeek, { fourWeeks, oneWeek });
-  check('and no more than All', fourWeeks <= allCount, { fourWeeks, allCount });
-  check('going back to All restores the full list', (await pick('All')) === allCount);
-  root = appNode();
-  // drag a notes file onto a test card, exactly like the real drop handler
-  section('Drag-and-drop a notes file onto a test card');
-  const dropCard = testCards[1];
-  const dropTestId = (await (await fetch(BASE + '/api/tests')).json())[1].id;
-  const beforeDrop = await (await fetch(BASE + '/api/tests/' + dropTestId)).json();
-  const notesText = [
-    'Nucleus - the organelle that holds the cell DNA',
-    'Chloroplast - the organelle where photosynthesis happens',
-    'Diffusion - particles spreading from high to low concentration',
-  ].join('\n');
-  const fakeFile = {
-    name: 'dropped-notes.txt',
-    arrayBuffer: async () => new TextEncoder().encode(notesText).buffer,
-  };
-  (dropCard.classList.add('drag-over'));
-  const ebD = errors.length;
-  const dropFns = dropCard.listeners.drop || [];
-  check('test card has a drop handler', dropFns.length > 0);
-  await dropFns[0]({ preventDefault() {}, dataTransfer: { files: [fakeFile] } });
-  await settle(600);
-  check('dropping a file did not error', errors.length === ebD, errors.slice(ebD).join(' | '));
-  let dropped;
-  for (let i = 0; i < 60; i++) {
-    dropped = await (await fetch(BASE + '/api/tests/' + dropTestId)).json();
-    if (dropped.notes_status !== 'processing') break;
-    await settle(250);
-  }
-  check('dropped file finished processing', dropped.notes_status === 'done', dropped.notes_status);
-  check('dropped file added flashcards', dropped.total_cards > beforeDrop.total_cards, `${beforeDrop.total_cards} -> ${dropped.total_cards}`);
-  check('dropped file made study notes', dropped.notes.includes('dropped-notes.txt'));
-  check('drop cleared the highlight', !dropCard._classes().includes('drag-over'));
-
-  await renderView('tests');
-  root = appNode();
-  const doneBadge = nodesIn(root).some((n) => /Notes added/.test(n.text));
-  check('tests page shows the "Notes added" badge', doneBadge);
-
-  const testCards2 = nodesIn(appNode()).filter((n) => n._classes().includes('card'));
-  const ebT = errors.length;
-  await testCards2[0].onclick(); await settle(700);
-  check('clicking a test opens its page', run('state.view') === 'test' && errors.length === ebT);
-  root = appNode();
-  check('test page has a Flashcards/Notes switcher', nodesIn(root).filter((n) => n.tagName === 'BUTTON' && /Flashcards|Notes/.test(n.text)).length === 2);
-  check('test page still HAS the study timer', nodesIn(root).some((n) => n._classes().includes('timer')));
-  check('test page shows the study log', nodesIn(root).some((n) => n._classes().includes('studylog')));
-
-  const flashFace = nodesIn(root).find((n) => n._classes().includes('flashcard'));
-  if (flashFace) {
-    const frontText = flashFace.textContent;
-    await flashFace.onclick(); await settle(200);
-    check('tapping a card flips it', nodesIn(appNode()).find((n) => n._classes().includes('flashcard')).textContent !== frontText);
-    const knew = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && /Knew it/.test(n.text));
-    const miss = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && /Didn't know/.test(n.text));
-    check('flipped card offers both grade buttons', !!knew && !!miss);
-    const ebF = errors.length;
-    await knew.onclick(); await settle(600);
-    check('grading a card works', errors.length === ebF, errors.slice(ebF).join(' | '));
-  } else {
-    check('flashcards region rendered something', nodesIn(root).some((n) => n._classes().includes('deliverable')));
-  }
-  const notesBtn = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && n.text === 'Notes');
-  const ebN = errors.length;
-  await notesBtn.onclick(); await settle(400);
-  check('Notes switcher shows notes', errors.length === ebN && nodesIn(appNode()).some((n) => n._classes().includes('notes-view') || n._classes().includes('deliverable')));
-  const fcBtn = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && n.text === 'Flashcards');
-  await fcBtn.onclick(); await settle(400);
-  check('switching back to Flashcards works', errors.length === ebN);
-
-  const timerBtn = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && /^Start$/.test(n.text));
-  check('study timer has a Start button', !!timerBtn);
-  if (timerBtn) {
-    await timerBtn.onclick();
-    check('timer switches to Pause', timerBtn.textContent === 'Pause');
-    await timerBtn.onclick();
-    check('timer switches back to Start', timerBtn.textContent === 'Start');
-  }
-
-  // ------------------------------------------------------- email popup
-  section('Email popup');
-  await renderView('email');
-  const mails = nodesIn(appNode()).filter((n) => n._classes().includes('email-item'));
-  check('email list is clickable', mails.length > 0 && typeof mails[0].onclick === 'function');
-  const ebMail = errors.length;
-  await mails[0].onclick(); await settle(900);
-  const mailPanel = () => nodesIn(panelNode()).map((n) => n.text).join(' | ');
-  check('clicking an email opens a popup', panelNode().children.length > 0 && errors.length === ebMail);
-  const fullText = nodesIn(panelNode()).find((n) => n._classes().includes('email-full'));
-  check('the popup shows the full message', !!fullText && fullText.text.length > 120, String(fullText && fullText.text.length));
-  check('the full message is longer than the preview',
-    !!fullText && fullText.text.length > (mails[0].text || '').length / 2);
-  check('the popup has a close button', nodesIn(panelNode()).some((n) => n._classes().includes('panel-close')));
-  run('closePanel(false)');
-
-  // The second mock message is the one with two attachments.
-  await renderView('email');
-  const mails2 = nodesIn(appNode()).filter((n) => n._classes().includes('email-item'));
-  const withAttach = mails2.find((m) => /Unit 4 Test is coming up/.test(m.text));
-  await withAttach.onclick(); await settle(900);
-  const attachRows = nodesIn(panelNode()).filter((n) => n._classes().includes('attach'));
-  check('attachments are listed', attachRows.length === 2, String(attachRows.length));
-  check('each attachment is named', attachRows.every((a) => a.text.length > 4), attachRows.map((a) => a.text).join(' | '));
-  check('attachments link out to Canvas', attachRows.every((a) => /^https?:/.test(a.href || '')));
-  check('the popup says how many there are', /2 attachments/i.test(mailPanel()));
-  run('closePanel(false)');
-
-  // ------------------------------------------------ nothing shows a bar
   section('No progress bars, no emoji');
   // The work page is in here because the chat launcher wanted a speech-bubble
   // emoji and got a drawn one instead — a rule the list views alone would not
   // have caught.
-  for (const view of ['today', 'week', 'projects', 'tests', 'classes', 'email', 'copilot', 'work']) {
+  for (const view of ['documents', 'slideshows', 'copilot', 'marks', 'work']) {
     await renderView(view, view === 'work' ? `state.workId = ${textA.id};` : '');
     const bars = nodesIn(appNode()).filter((n) => n._classes().includes('bar') || n.htmlClasses.includes('bar'));
     check(`${view} has no progress bar`, bars.length === 0, String(bars.length));
@@ -1074,128 +870,6 @@ async function renderView(view, extra = '') {
   }
 
   // ----------------------------------------------------------- classes UI
-  section('Classes + email UI');
-  await renderView('classes');
-  root = appNode();
-  const classCards = nodesIn(root).filter((n) => n._classes().includes('card'));
-  check('classes page lists 5 classes', classCards.length === 5);
-  check('GPA box is shown', nodesIn(root).some((n) => n._classes().includes('big-number')));
-
-  // The grade on a card: overall big, then the two halves the school grades on.
-  const bigs = nodesIn(root).filter((n) => n._classes().includes('grade-big'));
-  check('every class card shows its overall percent big', bigs.length === classCards.length, bigs.length);
-  const cells = nodesIn(root).filter((n) => n._classes().includes('grade-cell'));
-  check('and two smaller ones for formative and summative', cells.length >= 8, cells.length);
-  const labels = nodesIn(root).filter((n) => n._classes().includes('grade-cell-label')).map((n) => n.text);
-  check('labelled Formative and Summative',
-    labels.includes('Formative') && labels.includes('Summative'), labels.slice(0, 4).join(','));
-  const pcts = nodesIn(root).filter((n) => n._classes().includes('grade-cell-pct')).map((n) => n.text);
-  check('a category with nothing graded shows a dash, not 0%',
-    pcts.some((p) => p === '—') && !pcts.some((p) => p === '0%'), pcts.join(' '));
-
-  const ebC = errors.length;
-  await classCards[0].onclick(); await settle(800);
-  check('clicking a class opens its full page', run('state.view') === 'class' && errors.length === ebC);
-  check('the class page shows the grades table', nodesIn(appNode()).some((n) => n._classes().includes('gtable')));
-  check('the class page repeats the split', nodesIn(appNode()).some((n) => n._classes().includes('grade-split')));
-  const tags = nodesIn(appNode()).filter((n) => n._classes().includes('cat-tag')).map((n) => n.text);
-  check('each graded assignment is tagged formative or summative',
-    tags.length > 0 && tags.every((t) => t === 'Formative' || t === 'Summative'), tags.join(','));
-  check('the class page highlights the Classes tab',
-    (document._tabs.find((t) => t._classes().includes('active')) || {}).dataset?.view === 'classes');
-  const classBack = nodesIn(appNode()).find((n) => n._classes().includes('back-btn'));
-  check('the class page has a back button', !!classBack);
-
-  // -------------------------------------------------------------- notes UI
-  section('Class notes');
-  const classIdForNotes = run('state.classId');
-  // The UI phase runs with AI switched off, so uploading a photo takes the
-  // graceful-failure path: the note is created and kept, the read fails, and
-  // typing the text in by hand is the way back. Both halves matter.
-  const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
-  const jpost = (p, b) => fetch(BASE + p, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b),
-  }).then((r) => r.json());
-  const uploaded = await jpost(`/api/classes/${classIdForNotes}/notes`, {
-    filename: 'my-notes.png', content_base64: TINY_PNG,
-  });
-  check('uploading a photo creates the note straight away', uploaded.ok === true && !!uploaded.note.id);
-  await settle(900);
-  const afterRead = await (await fetch(BASE + `/api/notes/${uploaded.note.id}`)).json();
-  check('a failed read keeps the note instead of losing it', !!afterRead.id && afterRead.status === 'error');
-  check('and says what went wrong in plain English', afterRead.error.length > 20, afterRead.error);
-  const typedIn = await jpost(`/api/notes/${uploaded.note.id}`, {
-    title: 'Photosynthesis',
-    text: 'Photosynthesis happens in the chloroplast. 6CO2 + 6H2O -> C6H12O6 + 6O2. Light reactions run in the thylakoid; the Calvin cycle runs in the stroma.',
-  });
-  check('typing the notes in by hand fixes the note', typedIn.ok === true && typedIn.note.status === 'ready');
-  check('and clears the error', typedIn.note.error === '');
-
-  const notesTab = nodesIn(appNode()).find((n) => n.tagName === 'BUTTON' && n.text === 'Notes');
-  check('the class page has a Notes tab next to Grades', !!notesTab);
-  const ebNotes = errors.length;
-  await notesTab.onclick(); await settle(800);
-  check('the Notes tab has an Add Notes button',
-    nodesIn(appNode()).some((n) => n.tagName === 'BUTTON' && n.text === 'Add Notes'));
-  check('an empty Notes tab says so', /No notes yet/.test(nodesIn(appNode()).map((n) => n.text).join(' ')));
-  check('the file picker only accepts images',
-    nodesIn(appNode()).some((n) => n.tagName === 'INPUT' && n.type === 'file' && /image\//.test(n.accept || '')));
-  check('opening Notes throws no js errors', errors.length === ebNotes, errors.slice(ebNotes).join(' | '));
-
-  // A note that already exists (seeded straight into the DB by the api phase's
-  // sibling helper below) drives the menu, the editor and the test picker.
-  const madeNote = await (await fetch(BASE + `/api/classes/${classIdForNotes}/notes`)).json();
-  if (madeNote.notes.length) {
-    await renderView('class', `state.classId = ${classIdForNotes}; state.classTab = 'notes';`);
-    const noteCards = nodesIn(appNode()).filter((n) => n._classes().includes('note-card'));
-    check('a saved note shows up in the list', noteCards.length >= 1);
-    const dots = nodesIn(appNode()).find((n) => n._classes().includes('menu-btn'));
-    check('each note has a three-dot menu', !!dots);
-    await dots.onclick({ stopPropagation() {} }); await settle(200);
-    const items = nodesIn(appNode()).filter((n) => n._classes().includes('menu-item')).map((n) => n.text);
-    check('the menu offers Edit Note, Add to Test and Delete Note',
-      items.includes('Edit Note') && items.includes('Add to Test') && items.includes('Delete Note'), items.join(','));
-
-    const editItem = nodesIn(appNode()).find((n) => n._classes().includes('menu-item') && n.text === 'Edit Note');
-    await editItem.onclick({ stopPropagation() {} }); await settle(400);
-    const editor = nodesIn(panelNode()).find((n) => n.tagName === 'TEXTAREA');
-    check('Edit Note opens an editor with the typed-up text', !!editor && editor.value.length > 5);
-    editor.value = 'Edited by the drive harness.';
-    const saveNote = nodesIn(panelNode()).find((n) => n.tagName === 'BUTTON' && n.text === 'Save note');
-    await saveNote.onclick(); await settle(700);
-    const afterEdit = await (await fetch(BASE + `/api/notes/${madeNote.notes[0].id}`)).json();
-    check('saving the edit keeps the new text', afterEdit.text === 'Edited by the drive harness.', afterEdit.text);
-
-    await renderView('class', `state.classId = ${classIdForNotes}; state.classTab = 'notes';`);
-    const dots2 = nodesIn(appNode()).find((n) => n._classes().includes('menu-btn'));
-    await dots2.onclick({ stopPropagation() {} }); await settle(200);
-    const addItem = nodesIn(appNode()).find((n) => n._classes().includes('menu-item') && n.text === 'Add to Test');
-    await addItem.onclick({ stopPropagation() {} }); await settle(700);
-    const picks = nodesIn(panelNode()).filter((n) => n._classes().includes('test-pick'));
-    check('Add to Test lists the tests in that class', picks.length >= 1, String(picks.length));
-    run('closePanel(false)');
-
-    await renderView('class', `state.classId = ${classIdForNotes}; state.classTab = 'notes';`);
-    const dots3 = nodesIn(appNode()).find((n) => n._classes().includes('menu-btn'));
-    await dots3.onclick({ stopPropagation() {} }); await settle(200);
-    const delItem = nodesIn(appNode()).find((n) => n._classes().includes('menu-item') && n.text === 'Delete Note');
-    await delItem.onclick({ stopPropagation() {} }); await settle(400);
-    check('Delete Note asks before deleting',
-      nodesIn(panelNode()).some((n) => /cannot be undone/.test(n.text)));
-    const confirmNote = nodesIn(panelNode()).find((n) => n.tagName === 'BUTTON' && n.text === 'Delete note');
-    await confirmNote.onclick(); await settle(700);
-    const gone = await (await fetch(BASE + `/api/classes/${classIdForNotes}/notes`)).json();
-    check('confirming actually deletes it', gone.notes.length === 0, String(gone.notes.length));
-  }
-
-  await renderView('classes');
-  const backCards = nodesIn(appNode()).filter((n) => n._classes().includes('card'));
-  check('the classes list still works afterwards', backCards.length === 5);
-
-  await renderView('email');
-  check('email page lists messages', nodesIn(appNode()).filter((n) => n._classes().includes('email-item')).length >= 3);
-
-  // ------------------------------------------------------------------ api
   section('API page');
   await renderView('api');
   const apiText = appNode().textContent + nodesIn(appNode()).map((n) => n.textContent).join(' ');

@@ -217,21 +217,19 @@ const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
     check('auto-outline succeeds', out.ok === true && out.slides.length >= 4);
     check('outline honors "6-8 slides" -> 7', out.slides.length === 7);
     check('outline slide 1 is a title slide', !!out.slides[0].title);
-    check('outline slides carry a photo flag', out.slides.every((s) => s.photo === false));
 
     const full = [
-      { title: 'The Declaration of Independence', bullets: ['U.S. History · Will Caldwell'], photo: false },
-      { title: 'What the Document Says', bullets: ['A list of grievances against the King', 'A statement of natural rights', 'A formal declaration of separation'], photo: false },
-      { title: 'Historical Context', bullets: ['Written in the summer of 1776', 'Debated and edited by the Continental Congress'], photo: true },
-      { title: 'Key Ideas', bullets: ['All men are created equal', 'Government needs the consent of the governed'], photo: false },
-      { title: 'Its Lasting Impact', bullets: ['Quoted by abolitionists and suffragists', 'Still cited in court arguments today'], photo: false },
-      { title: 'Conclusion', bullets: ['A break-up letter that became a founding promise'], photo: false },
+      { title: 'The Declaration of Independence', bullets: ['U.S. History · Will Caldwell'] },
+      { title: 'What the Document Says', bullets: ['A list of grievances against the King', 'A statement of natural rights', 'A formal declaration of separation'] },
+      { title: 'Historical Context', bullets: ['Written in the summer of 1776', 'Debated and edited by the Continental Congress'] },
+      { title: 'Key Ideas', bullets: ['All men are created equal', 'Government needs the consent of the governed'] },
+      { title: 'Its Lasting Impact', bullets: ['Quoted by abolitionists and suffragists', 'Still cited in court arguments today'] },
+      { title: 'Conclusion', bullets: ['A break-up letter that became a founding promise'] },
     ];
     const saved = (await post(`/api/projects/${slideProj.id}/slides`, { slides: full })).body;
     check('all 6 slides save', saved.count === 6);
     const rl = (await get('/api/projects/' + slideProj.id)).body;
     check('slides come back in order', rl.slides[1].title === 'What the Document Says');
-    check('photo toggle persists', rl.slides[2].photo === true && rl.slides[1].photo === false);
     check('has_custom_slides flips true', rl.has_custom_slides === true);
 
     const sopts = (await get(`/api/download-options?kind=project&id=${slideProj.id}`)).body;
@@ -246,15 +244,17 @@ const b64 = (s) => Buffer.from(s, 'utf8').toString('base64');
         check('pptx has 6 slides', !!unzipEntry(buf, 'ppt/slides/slide6.xml') && !unzipEntry(buf, 'ppt/slides/slide7.xml'));
         check('pptx has NO media parts', !buf.includes(Buffer.from('ppt/media/')));
         const s1 = unzipEntry(buf, 'ppt/slides/slide1.xml');
-        check('pptx slide 1 is my title slide', s1.includes('The Declaration of Independence'));
+        check('pptx slide 1 header is my title', s1.includes('The Declaration of Independence'));
         const s3 = unzipEntry(buf, 'ppt/slides/slide3.xml');
-        check('pptx picture space only where toggled', s3.includes('Picture space') && !unzipEntry(buf, 'ppt/slides/slide2.xml').includes('Picture space'));
+        // Plain deck: real placeholders, no picture frames or brand colours.
+        check('pptx slides use real placeholders', s3.includes('<p:ph type="title"/>') && s3.includes('<p:ph idx="1"/>'));
+        check('pptx has no picture frames or cards', !buf.includes(Buffer.from('Picture space')) && !buf.includes(Buffer.from('name="Point 1"')));
         fs.copyFileSync(dl.saved_to, path.join(SCRATCH, 'verify-deck.pptx'));
       }
       if (f.ext === 'html') {
         const html = buf.toString('utf8');
         check('html has every slide', full.every((s) => html.includes(s.title)));
-        check('html has the picture space', html.includes('Picture goes here'));
+        check('html has no picture frames or cards', !html.includes('Picture goes here') && !html.includes('class="card"'));
         check('html embeds no images', !html.includes('<img'));
       }
       if (f.ext === 'txt') check('txt outline labels the title slide', buf.toString('utf8').startsWith('Title slide:'));

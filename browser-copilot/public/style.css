@@ -247,6 +247,28 @@ main { flex: 1; position: relative; overflow: hidden; }
   word-break: break-word;
 }
 
+#docFrame {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  min-height: 0;
+}
+
+/* A finished file, handed back in the chat. */
+.file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(140, 168, 145, 0.45);
+  background: var(--accent-soft);
+  border-radius: 10px;
+  max-width: 100%;
+}
+.file-card svg { flex: none; color: var(--accent); }
+.file-card .file-name { flex: 1; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* ---------- attachments + model picker ---------- */
 #attachBtn {
   flex: none;

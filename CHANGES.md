@@ -1,5 +1,105 @@
 # What's been built — plain English
 
+## 2026-10-28 — The copilot makes real documents and edits yours properly
+
+**Editing a Word file you upload keeps it looking the same.** Before, it read
+your worksheet as plain text and wrote a brand-new plain file, so the fonts,
+numbering and layout were lost (that's why your lab came back as a bare text
+file). Now it changes the actual file: it fills in answers under the
+questions, fixes text and puts pictures where you say, and everything else
+stays exactly as your teacher made it. It saves a new copy, so your upload is
+left alone.
+
+**It can take pictures from the browser and put them in documents.** Ask
+for "a screenshot of the Task Manager window under question 8" and it
+captures just that part of the tab and drops it in.
+
+**It makes good-looking PDFs.** It lays the page out properly (headings,
+spacing, boxes, tables, page breaks) and a hidden browser turns it into a
+real PDF. Give it a PDF and it can make a copy that looks the same with your
+screenshots added where you tell it. It checks its own PDF afterwards.
+
+**Files come back in the chat.** When it finishes a file, a card appears in
+the conversation with Preview and Open buttons. PDFs and pictures preview
+properly on the Documents tab now, and Word files show their text instead of
+gibberish.
+
+## 2026-09-20 — Slate is a set of school tools now
+
+Big change to how Slate is laid out. The dashboard sections are gone —
+no more Today, Week, Tests & Quizzes, Classes, or Email. Slate is now four
+tools: **Documents** (write a paper), **Slideshows** (make a PowerPoint),
+**Copilot**, and **Watermarks**. Canvas (the connect screen) and Admin moved
+to the bottom of the sidebar as small utilities.
+
+In Documents or Slideshows you click **New**, and a project opens. Inside it
+you pick the class and the Canvas assignment it's for — Slate pulls the
+instructions in — and then you can talk to the on-page Claude about it, write
+or build your slides, and hand it in. Everything saves on its own, and your
+projects are listed so you can come back to them any time.
+
+Your **Secular Ethics Presentation** is already there as a saved slideshow,
+with all its slides filled in, so you have one to open right away.
+
+Your old Canvas assignments aren't shown as projects anymore, but nothing was
+deleted — that work is still in the database if you ever want it back.
+
+## 2026-09-20 — The PowerPoint maker makes a plain, blank deck now
+
+You asked for it to just make a blank presentation with the header and the
+bullet points. That's what it does now: a normal white PowerPoint, each
+slide a title at the top and your bullet points under it, and nothing else —
+no dark background, no coloured boxes, no little slide numbers or corner
+dots, no "leave space for a picture". Because it's a plain deck, you can drop
+any PowerPoint theme on top of it and restyle the whole thing in one click.
+
+The preview on the "Make my PowerPoint" screen matches, so what you see is
+what the file is. The "leave space for a picture" checkbox is gone since it
+did nothing anymore. Speaker notes still work. Checked the real file opens
+clean and reads back right.
+
+## 2026-09-11 — The copilot can open and edit files you upload
+
+Attaching a Word document (or PowerPoint or Excel) with the paperclip now
+works. It didn't before: the copilot could only open plain text, images and
+PDFs, so a Word file came through as unreadable gibberish and it looked
+broken. It reads all of those properly now.
+
+And it can edit them. Ask it to fix or change an uploaded file and it saves
+the corrected version as a real Word file on the Documents tab — a new file,
+so your original is left alone. Checked end to end: uploaded a Word doc with
+a typo, asked for it fixed, got back a proper Word file with the typo gone
+and everything else intact.
+
+## 2026-09-10 — A Slate icon on the Mac Desktop
+
+Double-click Slate on your Desktop and it opens Slate in Opera — the same
+Opera window the Launch Opera button uses, so the copilot can see it. If
+Slate's program (or the copilot's) isn't running yet it starts them first,
+quietly, no Terminal window, and waits until they answer. If Opera itself is
+closed it starts that too, which takes about half a minute. The first
+version opened a black page; this one was checked from the inside. The website link is now in the
+outreach emails' signature too.
+
+## 2026-09-09 — The copilot can work a remote desktop, and take screenshots
+
+Some pages aren't really web pages: a remote desktop or virtual lab machine
+shown in the browser is just a live picture, with nothing for the copilot to
+read. It now has eyes and hands for those. It takes a screenshot, finds what
+it needs in the picture, clicks or drags at that spot, types as real
+keystrokes (so the remote machine gets them), presses combos like ctrl+alt+
+Delete, waits a moment for the screen to redraw, and looks again. Same rule
+as everywhere else: it won't press Submit, Send, Delete or Shut down on a
+remote screen unless you ask.
+
+Ask it for a screenshot of the tab it's on and it saves a full-size PNG to
+your Desktop, named after the tab and the time, or whatever name you give
+it. Screenshots no longer yank the Opera window to that tab, either.
+
+Verified on a throwaway browser with a fake lab login screen: Claude looked,
+clicked inside the box, typed the name so the "remote" screen showed it, and
+saved "lab proof.png". Nothing was run against your real Opera.
+
 ## 2026-09-04 — Launch Opera works again, and it brings Slate with it
 
 Pressing Launch Opera was showing an error and then nothing. Two things:

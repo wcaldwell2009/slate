@@ -103,12 +103,11 @@ function titlesToSlides(titles, subtitle) {
   return titles.map((t, i) => ({
     title: t,
     bullets: i === 0 ? [subtitle || ''] : [''],
-    photo: false,
     notes: '',
   }));
 }
 
-// Returns an array of slide objects [{title, bullets[], photo}].
+// Returns an array of slide objects [{title, bullets[], notes}].
 // row.class_name (when present) becomes the title slide's subtitle.
 async function generateOutline(row) {
   const subtitle = row.class_name || '';

@@ -221,26 +221,33 @@ test('pptx: slide 1 is the title slide, no pictures, picture space on request', 
   const s3 = unzipEntry(bytes, 'ppt/slides/slide3.xml');
   const types = unzipEntry(bytes, '[Content_Types].xml');
 
-  // Slide 1 is the title slide, using the student's own title and subtitle.
-  assert.ok(s1.includes('The U.S. Constitution'), 'title slide shows the builder title');
-  assert.ok(s1.includes('U.S. History'), 'and its subtitle');
+  // PLAIN deck (round 73): every slide is the default Title + Content
+  // placeholders — a header and bullet points on white, no design.
+  assert.ok(s1.includes('The U.S. Constitution'), 'slide 1 header is the builder title');
+  assert.ok(s1.includes('U.S. History'), 'and its first line');
   assert.ok(!s1.includes('ignored fallback'), 'the builder title beats the opts fallback');
-  assert.ok(!s1.includes('Picture space'), 'no picture frame on the title slide');
 
-  // Slate branding + the card layout.
-  assert.ok(s2.includes('8CA891') && s2.includes('14181D') && s2.includes('1F252C'), 'Slate colours');
-  assert.ok(s2.includes('Seven articles') && s2.includes('The Bill of Rights'));
-  assert.ok(s2.includes('name="Point 1"') && s2.includes('name="Tab 1"'), 'bullets become accent-tabbed cards');
-  assert.ok(s2.includes('2 / 3'), 'slide numbering');
+  // Real placeholders on every slide (this is what makes it a normal editable
+  // deck — bullets in Outline view, theme-able).
+  for (const s of [s1, s2, s3]) {
+    assert.ok(s.includes('<p:ph type="title"/>'), 'title placeholder');
+    assert.ok(s.includes('<p:ph idx="1"/>'), 'content placeholder');
+    assert.ok(!s.includes('<p:bg>'), 'no per-slide background — inherits the white master');
+  }
+  assert.ok(s2.includes('Seven articles') && s2.includes('The Bill of Rights'), 'bullets are in the body');
 
-  // Picture space only where it was asked for.
-  assert.ok(!s2.includes('Picture space'), 'no space reserved unless toggled on');
-  assert.ok(s3.includes('Picture space') && s3.includes('Picture goes here'), 'space reserved where toggled on');
+  // None of the old designed look: no Slate colours, cards, kickers, footers
+  // or picture frames anywhere in the deck.
+  const all = s1 + s2 + s3;
+  assert.ok(!/8CA891|14181D|1F252C/.test(all), 'no Slate brand colours');
+  assert.ok(!/name="Point |name="Tab |name="Kicker"|name="Footer"|Picture space|Picture goes here/.test(all),
+    'no cards, kickers, footers or picture frames');
+  assert.ok(!/\b2 \/ 3\b/.test(all), 'no slide numbering');
 
   // No image plumbing left in the package at all.
   assert.ok(!types.includes('image/jpeg') && !types.includes('image/png'), 'no image content types');
 
-  // An empty builder still produces a usable title slide.
+  // An empty builder still produces a usable first slide with a header.
   assert.ok(unzipEntry(og.buildPptx([], { title: 'Just a Title' }), 'ppt/slides/slide1.xml').includes('Just a Title'));
 });
 
@@ -266,8 +273,7 @@ test('slideshow project: detected, builder seeded, saves + downloads pptx', asyn
   assert.equal(saved.count, 3);
   const reload = await get('/api/projects/' + slideProj.id);
   assert.equal(reload.slides[0].title, 'My Presentation');
-  assert.equal(reload.slides[2].photo, true, 'the picture-space toggle is saved');
-  assert.equal(reload.slides[1].photo, false);
+  assert.deepEqual(reload.slides[1].bullets, ['What the document is', 'Why it matters'], 'bullets round-trip');
 
   const opts = await get(`/api/download-options?kind=project&id=${slideProj.id}`);
   assert.deepEqual(opts.formats.map((f) => f.ext), ['pptx', 'html', 'txt']);

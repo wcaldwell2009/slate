@@ -17,13 +17,23 @@ const TOOL_LABELS = {
   fill_many: (i) => `Filling ${i.fields?.length ?? '?'} fields at once`,
   click_element: (i) => `Clicking element ${i.elementId ?? ''}`,
   press_key: (i) => `Pressing ${i.key ?? 'key'}`,
-  screenshot: () => 'Taking a screenshot',
+  screenshot: (i) => (i.save ? 'Saving a screenshot to your Desktop' : 'Taking a screenshot'),
+  click_at: (i) => `${i.clickCount === 2 ? 'Double-clicking' : i.button === 'right' ? 'Right-clicking' : 'Clicking'} at ${Math.round(i.x ?? 0)}, ${Math.round(i.y ?? 0)}`,
+  move_mouse: (i) => `Moving the mouse to ${Math.round(i.x ?? 0)}, ${Math.round(i.y ?? 0)}`,
+  drag: (i) => `Dragging from ${Math.round(i.fromX ?? 0)}, ${Math.round(i.fromY ?? 0)} to ${Math.round(i.toX ?? 0)}, ${Math.round(i.toY ?? 0)}`,
+  scroll_at: (i) => `Scrolling ${(i.deltaY ?? 0) < 0 ? 'up' : 'down'}`,
+  type_text: (i) => `Typing “${String(i.text ?? '').slice(0, 60)}”`,
+  wait: (i) => `Waiting ${i.seconds ?? ''}s for the screen`,
   navigate: (i) => `Opening ${String(i.url ?? '').slice(0, 80)}`,
   list_tabs: () => 'Listing your tabs',
   switch_tab: () => 'Switching tab',
   save_document: (i) => `Writing ${i.name ?? 'a document'}`,
   read_document: (i) => `Reading ${i.name ?? 'a document'}`,
+  read_file: (i) => `Reading ${String(i.path ?? 'a file').split('/').pop().replace(/^[a-z0-9]+-/, '')}`,
   list_documents: () => 'Looking through the documents',
+  capture_image: (i) => `Capturing ${i.name ? '“' + i.name + '”' : 'a picture'} from the page`,
+  make_pdf: (i) => `Making ${i.name ?? 'a PDF'}`,
+  edit_docx: (i) => `Editing into ${i.output_name ?? 'a Word file'}${Array.isArray(i.edits) ? ` (${i.edits.length} change${i.edits.length === 1 ? '' : 's'})` : ''}`,
   Read: (i) => `Reading ${String(i.file_path ?? 'a file').split('/').pop().replace(/^[a-z0-9]+-/, '')}`,
 };
 
@@ -156,6 +166,27 @@ class Chat {
     this.chips.push({ name, chip, state });
   }
 
+  // A file Claude made, handed back: click Open for the real app, or Show to
+  // see it on the Documents tab.
+  addFileCard(name) {
+    const card = document.createElement('div');
+    card.className = 'file-card';
+    card.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+    const label = document.createElement('span');
+    label.className = 'file-name';
+    label.textContent = name;
+    const show = document.createElement('button');
+    show.className = 'ghost-btn';
+    show.textContent = 'Preview';
+    show.onclick = () => { setMode('docs'); showDoc(name); };
+    const open = document.createElement('button');
+    open.className = 'ghost-btn';
+    open.textContent = 'Open';
+    open.onclick = () => fetch('/api/docs/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+    card.append(label, show, open);
+    this.row(card);
+  }
+
   completeToolChip(name, ok, error) {
     const idx = this.chips.findIndex((c) => c.name === name);
     if (idx === -1) return;
@@ -242,12 +273,14 @@ async function refreshDocs() {
     empty.textContent = 'Nothing here yet — ask Claude to write something up and it lands in this list (and in the "Browser Copilot" folder in your Documents).';
     list.appendChild(empty);
     $('docPreview').hidden = true;
+    $('docFrame').hidden = true;
     openDocName = null;
     return;
   }
   if (openDocName && !r.docs.some((d) => d.name === openDocName)) {
     openDocName = null;
     $('docPreview').hidden = true;
+    $('docFrame').hidden = true;
   }
   for (const d of r.docs) {
     const row = document.createElement('div');
@@ -272,6 +305,18 @@ async function refreshDocs() {
   }
 }
 async function showDoc(name) {
+  // PDFs and pictures preview as themselves; everything else as text.
+  if (/\.(pdf|png|jpe?g|gif)$/i.test(name)) {
+    openDocName = name;
+    $('docPreview').hidden = true;
+    const frame = $('docFrame');
+    frame.src = '/api/docs/file?name=' + encodeURIComponent(name) + '&t=' + Date.now();
+    frame.hidden = false;
+    document.querySelectorAll('.doc-row').forEach((n) => n.classList.toggle('active', n.querySelector('.doc-name')?.textContent === name));
+    return;
+  }
+  $('docFrame').hidden = true;
+  $('docFrame').removeAttribute('src');
   let r;
   try {
     r = await fetch('/api/docs/content?name=' + encodeURIComponent(name)).then((x) => x.json());
@@ -615,6 +660,7 @@ function handleEvent(msg) {
 
     case 'tool_done':
       chat.completeToolChip(msg.name, msg.ok, msg.error);
+      if (msg.ok && msg.file) chat.addFileCard(msg.file);
       break;
 
     case 'tab_switched':

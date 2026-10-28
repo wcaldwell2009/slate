@@ -43,13 +43,11 @@ const app = $('#app');
 const overlay = $('#overlay');
 const panel = $('#panel');
 let state = {
-  view: 'today', todaySort: 'due', todayTab: 'assignments', doneTab: 'unfinished',
-  workId: null, classId: null, classTab: 'grades',
+  view: 'documents',
+  workId: null, projectId: null, classId: null, classTab: 'grades',
   // Ask Claude: open or shut. Held here rather than in the DOM so the panel
   // stays open across a re-render of the page underneath it.
   chatOpen: false,
-  // How far ahead Tests & Quizzes is looking, in weeks. 0 = all of them.
-  testWeeks: 0,
 };
 // Set by refreshStatus, which always runs before the first render. Slate starts
 // empty now, so every empty page needs to know whether that means "you're all
@@ -548,18 +546,22 @@ function projectCardNode(p) {
 // ---- WORK PAGE (full page per assignment) --------------------------------
 async function renderWork() {
   const a = await get('/api/assignments/' + state.workId);
-  if (!a || a.error) { state.view = 'today'; return render(); }
+  if (!a || a.error) { state.view = 'documents'; return render(); }
 
   const back = el('button', 'btn btn-ghost back-btn', '← Back');
-  back.onclick = () => { state.view = 'today'; state.workId = null; render(); };
+  back.onclick = () => { state.view = 'documents'; state.workId = null; render(); };
   app.appendChild(back);
 
-  const head = el('div', 'work-head');
-  head.appendChild(el('h1', 'view-title', esc(a.title)));
-  head.appendChild(el('div', 'view-sub',
-    `${esc(a.class_name)} · ${esc(a.points)} pts · due ${esc(fmtDue(a.due_at, a.due_date))}`
-    + (a.due_morning_of ? ' — so it has to be done today' : '')));
-  app.appendChild(head);
+  if (a.source === 'user') {
+    app.appendChild(projectSetup(a, 'doc'));
+  } else {
+    const head = el('div', 'work-head');
+    head.appendChild(el('h1', 'view-title', esc(a.title)));
+    head.appendChild(el('div', 'view-sub',
+      `${esc(a.class_name)} · ${esc(a.points)} pts · due ${esc(fmtDue(a.due_at, a.due_date))}`
+      + (a.due_morning_of ? ' — so it has to be done today' : '')));
+    app.appendChild(head);
+  }
 
   const body = el('div', 'work-body');
   if (a.work_mode === 'text') buildTextWork(body, a);
@@ -641,13 +643,13 @@ function buildTextWork(body, a) {
     await draft.flush();
     openDownloadPopup('assignment', a.id, () => {
       post(`/api/assignments/${a.id}/complete`);
-      state.view = 'today'; state.workId = null; render();
+      state.view = 'documents'; state.workId = null; render();
     });
   };
   const complete = el('button', 'btn btn-ghost', 'Mark complete');
   complete.onclick = async () => {
     await post(`/api/assignments/${a.id}/complete`);
-    state.view = 'today'; state.workId = null; render();
+    state.view = 'documents'; state.workId = null; render();
   };
   actions.appendChild(submit); actions.appendChild(complete);
   body.appendChild(actions);
@@ -845,41 +847,21 @@ function fitPages(host) {
 //
 // Everything is drawn from the SAME slide objects that go into the file, so the
 // preview cannot promise something the .pptx doesn't deliver.
+// A plain slide: header (title) at the top, one bullet per line under it, on a
+// white slide — exactly what buildPptx now writes. index/total are unused; the
+// deck is uniform, no special title slide, so the preview never flatters the
+// file (the round 44/45 rule).
 function slideStage(slide, index, total) {
-  const stage = el('div', 'pv-stage' + (index === 0 ? ' pv-title-slide' : ''));
+  const stage = el('div', 'pv-stage');
   const inner = el('div', 'pv-inner');
-  if (index === 0) {
-    inner.appendChild(el('div', 'pv-rule'));
-    inner.appendChild(el('div', 'pv-big-title', esc(slide.title || 'Untitled')));
-    const sub = (slide.bullets || []).filter((b) => String(b).trim());
-    if (sub.length) inner.appendChild(el('div', 'pv-subtitle', esc(sub.join(' · '))));
-    inner.appendChild(el('div', 'pv-dots', '<span></span><span></span><span></span>'));
+  inner.appendChild(el('div', 'pv-title', esc(slide.title || (index === 0 ? 'Untitled' : 'Untitled slide'))));
+  const bullets = (slide.bullets || []).filter((b) => String(b).trim());
+  if (!bullets.length) {
+    inner.appendChild(el('div', 'pv-empty', 'Nothing on this slide yet'));
   } else {
-    inner.appendChild(el('div', 'pv-kicker', String(index).padStart(2, '0')));
-    inner.appendChild(el('div', 'pv-title', esc(slide.title || 'Untitled slide')));
-    inner.appendChild(el('div', 'pv-rule'));
-    const cols = el('div', 'pv-cols' + (slide.photo ? ' pv-has-photo' : ''));
-    const body = el('div', 'pv-bullets');
-    const bullets = (slide.bullets || []).filter((b) => String(b).trim());
-    if (!bullets.length) body.appendChild(el('div', 'pv-empty', 'Nothing written on this slide yet'));
-    // Over six bullets the real .pptx drops the cards for a plain list, so the
-    // preview does the same rather than flattering the output.
-    else if (bullets.length > 6) {
-      const ul = el('ul', 'pv-plain');
-      bullets.forEach((b) => ul.appendChild(el('li', null, esc(b))));
-      body.appendChild(ul);
-    } else {
-      bullets.forEach((b) => {
-        const card = el('div', 'pv-card');
-        card.appendChild(el('span', 'pv-tab'));
-        card.appendChild(el('span', null, esc(b)));
-        body.appendChild(card);
-      });
-    }
-    cols.appendChild(body);
-    if (slide.photo) cols.appendChild(el('div', 'pv-photo', 'Picture goes here'));
-    inner.appendChild(cols);
-    inner.appendChild(el('div', 'pv-foot', `${index} / ${total - 1}`));
+    const ul = el('ul', 'pv-list');
+    bullets.forEach((b) => ul.appendChild(el('li', null, esc(b))));
+    inner.appendChild(ul);
   }
   stage.appendChild(inner);
   return stage;
@@ -1292,7 +1274,7 @@ function buildGuideWork(body, a) {
   const complete = el('button', 'btn btn-accent', 'Mark complete');
   complete.onclick = async () => {
     await post(`/api/assignments/${a.id}/complete`);
-    state.view = 'today'; state.workId = null; render();
+    state.view = 'documents'; state.workId = null; render();
   };
   actions.appendChild(complete);
   body.appendChild(actions);
@@ -1787,19 +1769,173 @@ async function renderProjects() {
   app.appendChild(grid);
 }
 
+// ---- DOCUMENTS + SLIDESHOWS: the two maker sections ----------------------
+// Each section lists the projects you have made and a "New" button. Opening one
+// lands on the same editor pages assignments used to use. A project links to a
+// Canvas class + assignment for its instructions and has the Ask Claude chat.
+async function renderSection(kind) {
+  const isSlides = kind === 'slides';
+  const r = await get('/api/documents?kind=' + (isSlides ? 'slides' : 'doc'));
+  const projects = (r && r.projects) || [];
+
+  const head = el('div', 'section-head');
+  head.appendChild(el('h1', 'view-title', isSlides ? 'Slideshows' : 'Documents'));
+  const newBtn = el('button', 'btn btn-accent', isSlides ? '+ New slideshow' : '+ New document');
+  newBtn.onclick = async () => {
+    const done = markBusy(newBtn, 'Creating…');
+    let res;
+    try { res = await post('/api/documents', { kind: isSlides ? 'slides' : 'doc' }); }
+    catch (e) { res = { ok: false, error: String((e && e.message) || e) }; }
+    finally { done(); }
+    if (res && res.ok) openProject(kind, res.id);
+    else toast((res && res.error) || 'Could not create it.');
+  };
+  head.appendChild(newBtn);
+  app.appendChild(head);
+
+  app.appendChild(el('p', 'page-sub', isSlides
+    ? 'Build a slideshow, pick the Canvas assignment it is for so Claude knows the instructions, and make your PowerPoint. Everything saves as you go.'
+    : 'Write a document, pick the Canvas assignment it is for so Claude knows the instructions, and hand it in. Everything saves as you go.'));
+
+  if (!projects.length) {
+    app.appendChild(emptyState(isSlides ? 'No slideshows yet' : 'No documents yet',
+      'Click ' + (isSlides ? '"New slideshow"' : '"New document"') + ' above to start one.'));
+    return;
+  }
+
+  const grid = el('div', 'proj-grid');
+  projects.forEach((p) => {
+    const card = el('div', 'proj-card clickable');
+    card.appendChild(el('div', 'proj-title', esc(p.title)));
+    const meta = [];
+    if (p.class_name) meta.push(p.class_name);
+    if (p.linked_assignment_name) meta.push(p.linked_assignment_name);
+    card.appendChild(el('div', 'proj-meta', esc(meta.join(' · ') || 'Not linked to Canvas yet')));
+    card.onclick = () => openProject(kind, p.id);
+
+    const del = el('button', 'proj-del', '✕');
+    del.title = 'Delete';
+    del.onclick = async (e) => {
+      e.stopPropagation();
+      await post(`/api/documents/${p.id}/delete`);
+      render();
+    };
+    card.appendChild(del);
+    grid.appendChild(card);
+  });
+  app.appendChild(grid);
+}
+function renderDocuments() { return renderSection('doc'); }
+function renderSlideshows() { return renderSection('slides'); }
+function openProject(kind, id) {
+  if (kind === 'slides') { state.view = 'project'; state.projectId = id; }
+  else { state.view = 'work'; state.workId = id; }
+  render();
+}
+
+// The editable title + Canvas class/assignment picker shown at the top of a
+// user project. Picking an assignment pulls its instructions from Canvas and
+// re-renders so the Instructions section and the chat both have them.
+function projectSetup(detail, kind) {
+  const wrap = el('div', 'proj-setup');
+  // createElement, not `new Option`: the same code has to run under the drive
+  // harness's DOM shim, which has no Option constructor.
+  const opt = (text, value, selected) => {
+    const o = document.createElement('option');
+    o.textContent = text; o.value = value == null ? '' : String(value);
+    if (selected) o.selected = true;
+    return o;
+  };
+
+  const titleIn = el('input', 'proj-title-input');
+  titleIn.type = 'text';
+  titleIn.value = detail.title || '';
+  titleIn.placeholder = kind === 'slides' ? 'Name this slideshow' : 'Name this document';
+  let t = null;
+  titleIn.oninput = () => {
+    clearTimeout(t);
+    t = setTimeout(() => post(`/api/documents/${detail.id}/rename`, { title: titleIn.value }), 600);
+  };
+  wrap.appendChild(titleIn);
+
+  const row = el('div', 'picker-row');
+  row.appendChild(el('span', 'picker-label', 'For the Canvas assignment:'));
+
+  const classSel = el('select', 'picker');
+  classSel.appendChild(opt('Pick a class…', ''));
+  const asgSel = el('select', 'picker');
+  asgSel.appendChild(opt('Pick a class first…', ''));
+  asgSel.disabled = true;
+  const status = el('span', 'picker-status');
+
+  function loadAssignments(classId, selectedId) {
+    asgSel.innerHTML = '';
+    asgSel.appendChild(opt('Loading…', ''));
+    asgSel.disabled = true;
+    get(`/api/canvas/classes/${classId}/assignments`).then((r) => {
+      const list = (r && r.assignments) || [];
+      asgSel.innerHTML = '';
+      asgSel.appendChild(opt(list.length ? 'Pick an assignment…' : 'No assignments found', ''));
+      list.forEach((a) => {
+        const o = opt(a.name, a.id);
+        if (selectedId && String(selectedId) === String(a.id)) o.selected = true;
+        asgSel.appendChild(o);
+      });
+      asgSel.disabled = !list.length;
+    }).catch(() => {
+      asgSel.innerHTML = '';
+      asgSel.appendChild(opt('Could not reach Canvas', ''));
+    });
+  }
+
+  get('/api/canvas/classes').then((r) => {
+    (r.classes || []).forEach((c) => {
+      const o = opt(c.name, String(c.id));
+      if (detail.class_id && Number(detail.class_id) === c.id) o.selected = true;
+      classSel.appendChild(o);
+    });
+    if (detail.class_id) loadAssignments(detail.class_id, detail.linked_assignment_id);
+  });
+
+  classSel.onchange = () => { if (classSel.value) loadAssignments(classSel.value, null); };
+  asgSel.onchange = async () => {
+    if (!classSel.value) return;
+    const opt = asgSel.options[asgSel.selectedIndex];
+    const name = opt ? opt.text : '';
+    status.textContent = asgSel.value ? 'Getting the instructions…' : 'Linking…';
+    const res = await post(`/api/documents/${detail.id}/link`, {
+      class_id: Number(classSel.value),
+      assignment_id: asgSel.value || null,
+      assignment_name: asgSel.value ? name : null,
+    });
+    if (res && res.ok) render();
+    else status.textContent = (res && res.error) || 'Could not link.';
+  };
+
+  row.appendChild(classSel);
+  row.appendChild(asgSel);
+  row.appendChild(status);
+  wrap.appendChild(row);
+  return wrap;
+}
+
 // Full page for one project.
 async function renderProjectPage() {
   const p = await get('/api/projects/' + state.projectId);
-  if (!p || p.error) { state.view = 'projects'; return render(); }
+  if (!p || p.error) { state.view = 'slideshows'; return render(); }
 
-  const back = el('button', 'btn btn-ghost back-btn', '← Back to Projects');
-  back.onclick = () => { state.view = 'projects'; state.projectId = null; render(); };
+  const back = el('button', 'btn btn-ghost back-btn', '← Back');
+  back.onclick = () => { state.view = 'slideshows'; state.projectId = null; render(); };
   app.appendChild(back);
 
-  const head = el('div', 'work-head');
-  head.appendChild(el('h1', 'view-title', esc(p.title)));
-  head.appendChild(el('div', 'view-sub', `${esc(p.class_name)} · ${esc(p.points)} pts · due ${fmtDate(p.due_date)}`));
-  app.appendChild(head);
+  if (p.source === 'user') {
+    app.appendChild(projectSetup(p, 'slides'));
+  } else {
+    const head = el('div', 'work-head');
+    head.appendChild(el('h1', 'view-title', esc(p.title)));
+    head.appendChild(el('div', 'view-sub', `${esc(p.class_name)} · ${esc(p.points)} pts · due ${fmtDate(p.due_date)}`));
+    app.appendChild(head);
+  }
 
   const body = el('div', 'work-body');
   body.appendChild(instructionsSection(p.id, p));
@@ -1816,7 +1952,7 @@ async function renderProjectPage() {
     const done = el('button', 'btn btn-accent', 'Mark complete');
     done.onclick = async () => {
       await post(`/api/assignments/${p.id}/complete`);
-      state.view = 'projects'; state.projectId = null; render();
+      state.view = 'slideshows'; state.projectId = null; render();
     };
     actions.appendChild(done);
     body.appendChild(actions);
@@ -1835,14 +1971,13 @@ function buildSlideMaker(body, p) {
     const out = (list || []).map((s) => ({
       title: s.title || '',
       bullets: (s.bullets && s.bullets.length) ? s.bullets.slice() : [''],
-      photo: !!s.photo,
       // Dropped here and every redraw would wipe the notes off the deck.
       notes: s.notes || '',
     }));
     // Slide 1 is always the title slide, pre-filled with the assignment name.
-    if (!out.length) out.push({ title: p.title, bullets: [p.class_name || ''], photo: false });
+    if (!out.length) out.push({ title: p.title, bullets: [p.class_name || ''] });
     if (!out[0].title.trim()) out[0].title = p.title;
-    if (out.length === 1) out.push({ title: '', bullets: [''], photo: false });
+    if (out.length === 1) out.push({ title: '', bullets: [''] });
     return out;
   };
   let slides = normalize(p.slides);
@@ -1906,7 +2041,7 @@ function buildSlideMaker(body, p) {
       top.appendChild(el('span', 'slide-num', isTitle ? 'Title slide' : 'Slide ' + (i + 1)));
       if (!isTitle) {
         const del = el('button', 'btn btn-danger btn-sm', 'Remove');
-        del.onclick = () => { slides.splice(i, 1); if (slides.length === 1) slides.push({ title: '', bullets: [''], photo: false, notes: '' }); save(); draw(); };
+        del.onclick = () => { slides.splice(i, 1); if (slides.length === 1) slides.push({ title: '', bullets: [''], notes: '' }); save(); draw(); };
         top.appendChild(del);
       }
       card.appendChild(top);
@@ -1939,20 +2074,12 @@ function buildSlideMaker(body, p) {
       bullets.oninput = () => { slide.bullets = bullets.value.split('\n'); save(); };
       card.appendChild(bullets);
 
-      const picRow = el('label', 'pic-toggle');
-      const cb = el('input');
-      cb.type = 'checkbox';
-      cb.checked = !!slide.photo;
-      cb.onchange = () => { slide.photo = cb.checked; save(); };
-      picRow.appendChild(cb);
-      picRow.appendChild(el('span', null, 'Leave space for a picture on this slide'));
-      card.appendChild(picRow);
       card.appendChild(notesBox(slide, i));
 
       list.appendChild(card);
     });
     const add = el('button', 'btn btn-ghost', '+ Add slide');
-    add.onclick = () => { slides.push({ title: '', bullets: [''], photo: false, notes: '' }); save(); draw(); };
+    add.onclick = () => { slides.push({ title: '', bullets: [''], notes: '' }); save(); draw(); };
     list.appendChild(add);
   }
   // First time on a slideshow project: auto-build the outline. After that,
@@ -3218,7 +3345,7 @@ function openAddUserPopup() {
   panel.appendChild(el('div', 'section-label', 'Password'));
   panel.appendChild(pwIn);
 
-  const adminWrap = el('label', 'pic-toggle');
+  const adminWrap = el('label', 'check-row');
   const adminBox = el('input'); adminBox.type = 'checkbox';
   adminWrap.appendChild(adminBox);
   adminWrap.appendChild(el('span', null, 'Make them an admin'));
@@ -3351,11 +3478,13 @@ function emptyState(title, sub) {
 }
 
 // ---- router --------------------------------------------------------------
+// Round 74: Slate is a set of tools now, not a Canvas dashboard. The sections
+// are Documents (written work), Slideshows, Copilot and Watermarks, plus the
+// Canvas connection and Admin as utilities. The old Today/Week/Tests/Classes/
+// Email renderers still exist in this file but are no longer routed to.
 const VIEWS = {
-  today: renderToday, work: renderWork, week: renderWeek,
-  projects: renderProjects, project: renderProjectPage,
-  tests: renderTests, test: renderTestPage,
-  classes: renderClasses, class: renderClassPage, email: renderEmail,
+  documents: renderDocuments, slideshows: renderSlideshows,
+  work: renderWork, project: renderProjectPage,
   api: renderApi, admin: renderAdmin, marks: renderMarks, copilot: renderCopilot,
 };
 
@@ -3626,7 +3755,7 @@ async function renderMarks() {
 }
 
 // Detail pages highlight their parent tab in the sidebar.
-const TAB_FOR = { work: 'today', project: 'projects', test: 'tests', class: 'classes' };
+const TAB_FOR = { work: 'documents', project: 'slideshows' };
 let rendering = false, pending = false;
 async function render() {
   // Serialize renders so overlapping calls can't blank the view.
@@ -3663,8 +3792,7 @@ async function render() {
 document.querySelectorAll('.tab').forEach((tab) => {
   tab.onclick = () => {
     state.view = tab.dataset.view;
-    state.workId = null; state.projectId = null; state.testId = null; state.classId = null;
-    state.classTab = 'grades';
+    state.workId = null; state.projectId = null; state.classId = null;
     render();
   };
 });
@@ -3736,7 +3864,7 @@ async function boot() {
 
   // The Admin tab is only any use to admins.
   $('#tab-admin').classList.toggle('hidden', !(session && session.is_admin));
-  if (state.view === 'admin' && !(session && session.is_admin)) state.view = 'today';
+  if (state.view === 'admin' && !(session && session.is_admin)) state.view = 'documents';
 
   const who = $('#who');
   if (me.login_required && session) {
@@ -3745,7 +3873,7 @@ async function boot() {
     $('#signout').onclick = async (e) => {
       e.preventDefault();
       await post('/api/logout');
-      state.view = 'today';
+      state.view = 'documents';
       await boot();
     };
   } else {

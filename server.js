@@ -355,6 +355,30 @@ async function handleApi(req, res, pathname, query) {
       const r = await require('./src/copilot').start();
       return sendJson(res, 200, r);
     }
+    // user-made projects (documents + slideshows)
+    if (pathname === '/api/documents' && method === 'GET') {
+      const kind = query.kind === 'slides' ? 'slides' : 'doc';
+      return sendJson(res, 200, { projects: api.listUserProjects(kind) });
+    }
+    if (pathname === '/api/documents' && method === 'POST') {
+      const kind = body.kind === 'slides' ? 'slides' : 'doc';
+      return sendJson(res, 200, api.createUserProject(kind));
+    }
+    if (seg[0] === 'documents' && seg[1] && method === 'POST') {
+      const id = Number(seg[1]);
+      if (seg[2] === 'rename') return sendJson(res, 200, api.renameProject(id, body.title));
+      if (seg[2] === 'delete') return sendJson(res, 200, api.deleteProject(id));
+      if (seg[2] === 'link') {
+        const r = await api.linkCanvasAssignment(id, Number(body.class_id), body.assignment_id, body.assignment_name);
+        return sendJson(res, r.ok ? 200 : 400, r);
+      }
+    }
+    // class + Canvas-assignment pickers for a project
+    if (pathname === '/api/canvas/classes' && method === 'GET') return sendJson(res, 200, { classes: api.classChoices() });
+    if (seg[0] === 'canvas' && seg[1] === 'classes' && seg[2] && seg[3] === 'assignments' && method === 'GET') {
+      return sendJson(res, 200, { assignments: await api.canvasAssignmentsForClass(Number(seg[2])) });
+    }
+
     if (pathname === '/api/canvas' && method === 'GET') return sendJson(res, 200, api.canvasSettings());
     if (pathname === '/api/canvas' && method === 'POST') {
       return sendJson(res, 200, await api.connectCanvas(body));
@@ -485,6 +509,7 @@ function listen(attempt = 0) {
 }
 
 ensureSeeded()
+  .then(() => { try { api.ensureStarterProjects(); } catch (e) { console.warn('starter seed:', e.message); } })
   .then(listen)
   .then(() => {
     const url = `http://localhost:${PORT}`;

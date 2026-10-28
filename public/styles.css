@@ -81,6 +81,8 @@ body {
 /* API and Admin sit at the foot of the list, right above the divider over
    "Sync now" — the auto margin eats all the leftover space above them. */
 .tab-bottom { margin-top: auto; }
+/* Canvas + Admin are utilities, not sections — smaller and quieter. */
+.tab-util { font-size: 12px; padding-top: 7px; padding-bottom: 7px; opacity: 0.8; }
 .tab:hover { color: var(--text); background: rgba(255, 255, 255, 0.04); }
 .tab.active {
   color: var(--text);
@@ -193,41 +195,23 @@ body {
 .pv-stage-host { flex: 1 1 auto; min-height: 0; display: flex; justify-content: center; }
 .pv-stage {
   position: relative; height: 100%; width: auto; max-width: 100%; aspect-ratio: 16 / 9;
-  background: #14181D; border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 6px; overflow: hidden; box-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+  background: #ffffff; border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 6px; overflow: hidden; box-shadow: 0 2px 14px rgba(0, 0, 0, 0.28);
   /* Text scales with the SLIDE, not the browser window, so the layout holds
      however the popup is sized. cqw = 1% of the slide's own width. */
   container-type: size;
 }
+/* A blank PowerPoint: black text on white, a bold header, plain bullets. This
+   mirrors buildPptx, which now writes default placeholder slides. */
 .pv-inner {
-  position: absolute; inset: 0; padding: 5.2% 6%;
-  display: flex; flex-direction: column; color: #E8E6E1;
-  font-family: 'Segoe UI', system-ui, sans-serif;
+  position: absolute; inset: 0; padding: 6% 7%;
+  display: flex; flex-direction: column; color: #1a1a1a;
+  font-family: 'Calibri', 'Segoe UI', system-ui, sans-serif;
 }
-.pv-kicker { font-size: 1.4cqw; letter-spacing: 2px; color: #6B7078; }
-.pv-title { font-size: 3.3cqw; font-weight: 700; color: #8CA891; margin-top: 0.2em; line-height: 1.15; }
-.pv-rule { height: 0.35cqw; width: 8cqw; background: #8CA891; border-radius: 2px; margin: 0.7em 0 0; }
-.pv-cols { display: flex; gap: 3%; flex: 1; min-height: 0; margin-top: 1.1em; }
-.pv-cols.pv-has-photo .pv-bullets { flex: 0 0 62%; }
-.pv-bullets { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 0.55em; min-width: 0; }
-.pv-card {
-  display: flex; align-items: flex-start; gap: 0.7em;
-  background: #1F252C; border-radius: 6px; padding: 0.7em 0.9em; font-size: 1.8cqw; line-height: 1.35;
-}
-.pv-tab { flex: none; width: 0.45cqw; align-self: stretch; background: #8CA891; border-radius: 2px; }
-.pv-plain { margin: 0; padding-left: 1.2em; font-size: 1.6cqw; line-height: 1.7; }
-.pv-empty { color: #6B7078; font-size: 1.6cqw; font-style: italic; }
-.pv-photo {
-  flex: 1; border: 2px dashed #8CA891; border-radius: 8px; color: #8CA891;
-  display: flex; align-items: center; justify-content: center; font-size: 1.4cqw; text-align: center;
-}
-.pv-foot { margin-top: auto; color: #6B7078; font-size: 1.25cqw; text-align: right; }
-/* the title slide */
-.pv-stage.pv-title-slide .pv-inner { justify-content: center; }
-.pv-big-title { font-size: 4.5cqw; font-weight: 700; color: #E8E6E1; margin-top: 0.5em; line-height: 1.15; }
-.pv-subtitle { font-size: 2cqw; color: #8CA891; margin-top: 0.5em; }
-.pv-dots { display: flex; gap: 0.9cqw; margin-top: 1.4em; }
-.pv-dots span { width: 0.9cqw; height: 0.9cqw; border-radius: 50%; background: #8CA891; opacity: 0.65; }
+.pv-title { font-size: 4cqw; font-weight: 700; color: #1a1a1a; line-height: 1.15; }
+.pv-list { margin: 0.9em 0 0; padding-left: 1.15em; font-size: 2.2cqw; line-height: 1.55; }
+.pv-list li { margin-bottom: 0.35em; }
+.pv-empty { color: #9aa0a6; font-size: 1.8cqw; font-style: italic; margin-top: 0.9em; }
 
 /* clicking between slides */
 .pv-bar { display: flex; align-items: center; justify-content: center; gap: 16px; }
@@ -443,12 +427,13 @@ ul.instructions li::before {
 .slide-title:focus, .slide-bullets:focus { outline: none; border-color: rgba(140, 168, 145, 0.5); }
 .slide-edit.title-slide { border-color: rgba(140, 168, 145, 0.35); background: rgba(140, 168, 145, 0.07); }
 .slide-sub { font-weight: 400; font-size: 14px; margin-bottom: 0; }
-.pic-toggle {
+/* A checkbox + label row (used by the Admin "make them an admin" toggle). */
+.check-row {
   display: flex; align-items: center; gap: 8px; margin-top: 10px;
   font-size: 13px; color: var(--muted); cursor: pointer;
 }
-.pic-toggle input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
-.pic-toggle:hover { color: var(--text); }
+.check-row input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.check-row:hover { color: var(--text); }
 
 /* ---- today: day plan + assignments/projects tabs ---- */
 .day-plan { margin-bottom: 14px; }
@@ -1160,3 +1145,36 @@ pre.compile { background: var(--surface-2); padding: 16px; border-radius: 10px; 
 /* The not-running / not-installed states are ordinary pages, so they carry the
    padding the container gave up. */
 .copilot-empty { padding: 26px 30px; max-width: 980px; }
+
+/* ---- Documents & Slideshows sections (round 74) ---- */
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.proj-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 18px; }
+.proj-card {
+  position: relative; background: var(--surface); border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px; padding: 16px 18px; cursor: pointer; transition: border-color 0.12s, transform 0.12s;
+}
+.proj-card:hover { border-color: var(--accent); }
+.proj-title { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 6px; padding-right: 20px; }
+.proj-meta { font-size: 13px; color: var(--muted); line-height: 1.35; }
+.proj-del {
+  position: absolute; top: 10px; right: 10px; width: 22px; height: 22px; border: none;
+  background: transparent; color: var(--muted); font-size: 13px; cursor: pointer; border-radius: 6px; line-height: 1;
+}
+.proj-del:hover { background: rgba(201, 138, 125, 0.18); color: var(--danger); }
+
+/* the class/assignment picker + title at the top of a project */
+.proj-setup { margin-bottom: 18px; }
+.proj-title-input {
+  width: 100%; box-sizing: border-box; background: transparent; border: none; color: var(--text);
+  font-size: 24px; font-weight: 600; padding: 2px 0; margin-bottom: 12px;
+  border-bottom: 1px solid transparent;
+}
+.proj-title-input:focus { outline: none; border-bottom-color: rgba(140, 168, 145, 0.5); }
+.picker-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.picker-label { font-size: 13px; color: var(--muted); }
+.picker {
+  background: var(--surface-2); color: var(--text); border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; max-width: 320px; cursor: pointer;
+}
+.picker:disabled { opacity: 0.5; cursor: default; }
+.picker-status { font-size: 12px; color: var(--accent); }

@@ -248,6 +248,17 @@ function migrate(db) {
   // 'none' | 'reading' | 'done' | 'error' — the page shows which, and an error
   // never stops the file being opened by hand.
   if (!cols.includes('attachment_state')) db.exec("ALTER TABLE assignments ADD COLUMN attachment_state TEXT DEFAULT 'none'");
+  // User-made projects (round 74). 'canvas' = pulled from Canvas by sync (the
+  // default for everything that already exists); 'user' = a document or
+  // slideshow the person created in Slate. sync keys on canvas_assignment_id,
+  // which user rows leave NULL, so it never touches them. A user project can be
+  // LINKED to a Canvas assignment for its instructions — that id lives in
+  // linked_assignment_id (NOT canvas_assignment_id, which is UNIQUE and owned
+  // by sync). updated_at drives "most recent first" in the section lists.
+  if (!cols.includes('source')) db.exec("ALTER TABLE assignments ADD COLUMN source TEXT DEFAULT 'canvas'");
+  if (!cols.includes('linked_assignment_id')) db.exec('ALTER TABLE assignments ADD COLUMN linked_assignment_id TEXT');
+  if (!cols.includes('linked_assignment_name')) db.exec('ALTER TABLE assignments ADD COLUMN linked_assignment_name TEXT');
+  if (!cols.includes('updated_at')) db.exec('ALTER TABLE assignments ADD COLUMN updated_at TEXT');
   // Which note a card came from, so a note's cards can be found (and cleaned up)
   // later. Null for cards made before class notes existed, and for the older
   // drag-a-file-onto-a-test path.

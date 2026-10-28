@@ -44,10 +44,28 @@ app.get('/api/docs', (req, res) => {
 
 app.get('/api/docs/content', (req, res) => {
   try {
-    res.json({ ok: true, ...docs.readDoc(req.query.name) });
+    const name = String(req.query.name || '');
+    // Office files are ZIPs — show their words, not their bytes.
+    if (/\.(docx|pptx|xlsx)$/i.test(name)) {
+      const r = docs.readFile(name);
+      const content = r.kind === 'docx' ? r.content.replace(/^\[\d+\](?: \([^)]*\))? ?/gm, '').replace(/^\(empty\)$/gm, '') : r.content;
+      return res.json({ ok: true, name, content });
+    }
+    res.json({ ok: true, ...docs.readDoc(name) });
   } catch (err) {
     res.json({ ok: false, error: String(err.message || err) });
   }
+});
+
+// The file itself, for previewing a PDF or picture inside the page. The path
+// comes from docs.fileForServing (a checked name inside the folder).
+app.get('/api/docs/file', (req, res) => {
+  const f = docs.fileForServing(req.query.name);
+  if (!f || !f.type) return res.status(404).json({ ok: false, error: 'No previewable file with that name.' });
+  res.setHeader('content-type', f.type);
+  res.setHeader('cache-control', 'no-store');
+  res.setHeader('content-disposition', 'inline');
+  fs.createReadStream(f.path).pipe(res);
 });
 
 // Opens a document with whatever app the machine uses for that type. The

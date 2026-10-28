@@ -188,24 +188,14 @@ const SLIDE_PROJECT = "closePanel(false);"
 // Each step sets up the view in the page, then gets photographed. `setup` runs
 // inside the browser and has the app's own state/render to work with.
 const STEPS = [
-  { name: 'today', setup: "state.view='today'; state.doneTab='unfinished'; await render();" },
-  { name: 'today-finished', setup: "state.view='today'; state.doneTab='finished'; await render();" },
-  { name: 'today-projects', setup: "state.view='today'; state.todayTab='projects'; state.doneTab='unfinished'; await render();" },
-  { name: 'week', setup: "state.todayTab='assignments'; state.view='week'; await render();" },
+  { name: 'documents', setup: "state.view='documents'; await render();" },
+  { name: 'slideshows', setup: "state.view='slideshows'; await render();" },
   {
-    name: 'week-day-popup',
-    setup: "state.view='week'; await render();"
-      + "const d=[...document.querySelectorAll('.day.clickable,.week-day.clickable,.day')].find(x=>x.onclick);"
-      + "if(d) d.onclick(); await new Promise(r=>setTimeout(r,400));",
-  },
-  { name: 'projects', setup: "closePanel(false); state.view='projects'; await render();" },
-  { name: 'tests-all', setup: "state.view='tests'; state.testWeeks=0; await render();" },
-  { name: 'tests-1-week', setup: "state.view='tests'; state.testWeeks=1; await render();" },
-  { name: 'classes', setup: "state.view='classes'; await render();" },
-  {
-    name: 'class-page',
-    setup: "const c=await get('/api/classes'); state.view='class'; state.classId=c[0].id;"
-      + " state.classTab='grades'; await render();",
+    // New document -> the Canvas class/assignment picker + editor.
+    name: 'new-document',
+    setup: "state.view='documents'; await render();"
+      + "const r=await post('/api/documents',{kind:'doc'});"
+      + "if(r&&r.ok){ state.view='work'; state.workId=r.id; await render(); await new Promise(x=>setTimeout(x,500)); }",
   },
   {
     name: 'assignment-editor',
@@ -443,7 +433,6 @@ const STEPS = [
       + " const rows=document.querySelectorAll('.src-row'); if(rows[0]) rows[0].onmouseenter();"
       + " await new Promise(r=>setTimeout(r,500)); }",
   },
-  { name: 'email', setup: "closePanel(false); state.view='email'; await render();" },
   {
     // The Copilot tab. The server here is pointed at a dead port on purpose
     // (SLATE_COPILOT_URL below), so this deterministically photographs the

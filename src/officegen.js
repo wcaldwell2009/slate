@@ -104,108 +104,31 @@ const NEWLINE = String.fromCharCode(10);
 function noteText(slide) {
   return String((slide && slide.notes) || '').trim();
 }
-const C_BG = '14181D', C_SURFACE = '1F252C', C_ACCENT = '8CA891', C_TEXT = 'E8E6E1', C_MUTED = '6B7078';
-const MARGIN = 548640;                      // 0.6"
-const CONTENT_W = SLIDE_W - MARGIN * 2;
-
-function run(text, sz, color, bold, spc) {
-  const attrs = `lang="en-US" sz="${sz}"${bold ? ' b="1"' : ''}${spc ? ` spc="${spc}"` : ''} dirty="0"`;
-  return `<a:r><a:rPr ${attrs}><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:latin typeface="Segoe UI"/></a:rPr><a:t>${xmlEsc(text)}</a:t></a:r>`;
+// PLAIN deck (Will, Sep 20): "just a blank presentation with just the bullet
+// points and header." Every slide is a default white slide — the Title
+// placeholder holds the header, the Content placeholder holds one bullet per
+// line — exactly what a blank PowerPoint gives you. No colours, cards,
+// kickers, footers, picture frames or dots; PowerPoint's own theme paints it,
+// so the whole deck restyles by picking a theme.
+//
+// Using the layout's REAL placeholders (type="title" and idx="1") is what puts
+// the bullets in Outline view and keeps them editable like a normal deck. The
+// bullet character, indent, fonts and colours all come from the slide master.
+function titlePh(title) {
+  return `<p:sp><p:nvSpPr><p:cNvPr id="2" name="Title 1"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US" dirty="0"/><a:t>${xmlEsc(title || '')}</a:t></a:r></a:p></p:txBody></p:sp>`;
 }
-function bulletPara(text, sz, color) {
-  return `<a:p><a:pPr marL="342900" indent="-342900"><a:spcBef><a:spcPts val="900"/></a:spcBef><a:buClr><a:srgbClr val="${C_ACCENT}"/></a:buClr><a:buFont typeface="Arial"/><a:buChar char="&#8226;"/></a:pPr>${run(text, sz, color)}</a:p>`;
+function bodyPh(bullets) {
+  const lines = (bullets || []).map((b) => String(b)).filter((b) => b.trim());
+  const paras = lines.length
+    ? lines.map((b) => `<a:p><a:r><a:rPr lang="en-US" dirty="0"/><a:t>${xmlEsc(b)}</a:t></a:r></a:p>`).join('')
+    : '<a:p><a:endParaRPr lang="en-US"/></a:p>';
+  return `<p:sp><p:nvSpPr><p:cNvPr id="3" name="Content Placeholder 2"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/>${paras}</p:txBody></p:sp>`;
 }
-function para(runsXml, align) { return `<a:p>${align ? `<a:pPr algn="${align}"/>` : ''}${runsXml}</a:p>`; }
-function centerPara(runsXml) { return para(runsXml, 'ctr'); }
-
-function textShape(id, name, x, y, cx, cy, paras, anchor) {
-  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:noFill/></p:spPr><p:txBody><a:bodyPr wrap="square" rtlCol="0"${anchor ? ` anchor="${anchor}"` : ''}><a:normAutofit/></a:bodyPr><a:lstStyle/>${paras}</p:txBody></p:sp>`;
-}
-function rectShape(id, name, x, y, cx, cy, fill, adj = 8000) {
-  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val ${adj}"/></a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="${fill}"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>`;
-}
-// A filled rounded panel that holds its own text — the bullet "cards".
-function panelShape(id, name, x, y, cx, cy, fill, paras) {
-  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="${name}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 9000"/></a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="${fill}"/></a:solidFill><a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr lIns="365760" tIns="91440" rIns="228600" bIns="91440" anchor="ctr" wrap="square"><a:normAutofit/></a:bodyPr><a:lstStyle/>${paras}</p:txBody></p:sp>`;
-}
-// An empty, clearly-marked space to drop a picture into later.
-function pictureFrame(id, x, y, cx, cy) {
-  return `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="Picture space"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="roundRect"><a:avLst><a:gd name="adj" fmla="val 6000"/></a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="${C_SURFACE}"/></a:solidFill><a:ln w="19050"><a:solidFill><a:srgbClr val="${C_ACCENT}"/></a:solidFill><a:prstDash val="dash"/></a:ln></p:spPr><p:txBody><a:bodyPr anchor="ctr" wrap="square"/><a:lstStyle/>${centerPara(run('Picture goes here', 1200, C_MUTED))}</p:txBody></p:sp>`;
-}
-
-function slideDoc(shapes) {
+// A default slide: white background inherited from the master, header + bullets.
+function plainSlideXml(title, bullets) {
+  const shapes = titlePh(title) + bodyPh(bullets);
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld xmlns:a="${NS_A}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val="${C_BG}"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${shapes}</p:spTree></p:cSld></p:sld>`;
-}
-
-// The opening slide: big left-aligned title against an accent rule, subtitle
-// under it, and a small three-dot motif in Slate's colors.
-function titleSlideXml(title, subtitle) {
-  const barY = 1965960, barH = 1737360;
-  const textX = MARGIN + 320040;
-  const shapes =
-    rectShape(2, 'Accent rule', MARGIN, barY, 54864, barH, C_ACCENT, 50000) +
-    textShape(3, 'Title', textX, barY - 91440, 9448800, 1280160,
-      para(run(title || 'Untitled', 4000, C_ACCENT, true), 'l'), 'b') +
-    (subtitle
-      ? textShape(4, 'Subtitle', textX, barY + 1280160, 9448800, 548640, para(run(subtitle, 1800, C_MUTED), 'l'), 't')
-      : '') +
-    rectShape(5, 'Dot 1', MARGIN, 5760720, 91440, 91440, C_ACCENT, 50000) +
-    rectShape(6, 'Dot 2', MARGIN + 182880, 5760720, 91440, 91440, C_SURFACE, 50000) +
-    rectShape(7, 'Dot 3', MARGIN + 365760, 5760720, 91440, 91440, C_SURFACE, 50000);
-  return slideDoc(shapes);
-}
-
-// A content slide. Bullets become rounded cards with an accent tab so the deck
-// looks designed without needing a photo on every slide. `slide.photo` reserves
-// a framed space on the right instead.
-function contentSlideXml(slide, index, total) {
-  const title = slide.title || '';
-  const bullets = (slide.bullets || []).map((b) => String(b)).filter((b) => b.trim());
-  const wantsPic = !!slide.photo;
-
-  const bodyY = 1706880;
-  const bodyH = SLIDE_H - bodyY - 731520;              // leave room for the footer
-  const bodyW = wantsPic ? 6217920 : CONTENT_W;
-
-  let id = 2;
-  let shapes =
-    textShape(id++, 'Kicker', MARGIN, 274320, 2743200, 320040,
-      para(run(String(index).padStart(2, '0'), 1100, C_MUTED, true, 300), 'l'), 't') +
-    textShape(id++, 'Title', MARGIN, 594360, CONTENT_W, 822960, para(run(title, 3200, C_ACCENT, true), 'l'), 't') +
-    rectShape(id++, 'Underline', MARGIN, 1463040, 1097280, 45720, C_ACCENT, 50000);
-
-  if (bullets.length && bullets.length <= 6) {
-    // Card layout — the interesting one.
-    const gap = 137160;
-    const cardH = Math.min(1005840, Math.floor((bodyH - gap * (bullets.length - 1)) / bullets.length));
-    // Centre the stack in the body area so a short list doesn't sit up top with
-    // a pile of dead space under it.
-    const blockH = cardH * bullets.length + gap * (bullets.length - 1);
-    const top = bodyY + Math.floor((bodyH - blockH) / 2);
-    bullets.forEach((b, i) => {
-      const y = top + i * (cardH + gap);
-      shapes += panelShape(id++, `Point ${i + 1}`, MARGIN, y, bodyW, cardH, C_SURFACE,
-        para(run(b, 1700, C_TEXT), 'l'));
-      // accent tab down the left edge of the card
-      const tabH = Math.round(cardH * 0.45);
-      shapes += rectShape(id++, `Tab ${i + 1}`, MARGIN + 137160, y + Math.round((cardH - tabH) / 2), 45720, tabH, C_ACCENT, 50000);
-    });
-  } else if (bullets.length) {
-    // Too many to card up nicely — fall back to a clean bullet list.
-    shapes += textShape(id++, 'Body', MARGIN, bodyY, bodyW, bodyH,
-      bullets.map((b) => bulletPara(b, 1600, C_TEXT)).join(''), 't');
-  }
-
-  if (wantsPic) {
-    shapes += pictureFrame(id++, MARGIN + bodyW + 274320, bodyY, CONTENT_W - bodyW - 274320, bodyH);
-  }
-
-  if (total > 1) {
-    shapes += textShape(id++, 'Footer', SLIDE_W - MARGIN - 1828800, SLIDE_H - 640080, 1828800, 274320,
-      para(run(`${index} / ${total}`, 1000, C_MUTED), 'r'), 'b');
-  }
-  return slideDoc(shapes);
+<p:sld xmlns:a="${NS_A}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>${shapes}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>`;
 }
 
 function themeXml() {
@@ -257,13 +180,12 @@ function notesSlideXml(text, index) {
 }
 function buildPptx(slides, opts = {}) {
   const list = (slides && slides.length) ? slides.slice() : [{ title: opts.title || 'Untitled', bullets: [] }];
-  const first = list[0];
-  const titleText = (first.title || '').trim() || opts.title || 'Untitled';
-  const subtitle = ((first.bullets || []).map((b) => String(b).trim()).filter(Boolean)[0]) || opts.subtitle || '';
-
-  const body = list.slice(1);
-  const docs = [{ xml: titleSlideXml(titleText, subtitle), notes: noteText(first) }];
-  body.forEach((s, i) => docs.push({ xml: contentSlideXml(s, i + 2, list.length), notes: noteText(s) }));
+  // Every slide the same plain shape: header + bullets. Slide 1's header falls
+  // back to opts.title so an unnamed deck still opens with something on it.
+  const docs = list.map((s, i) => ({
+    xml: plainSlideXml((String(s.title || '').trim()) || (i === 0 ? (opts.title || 'Untitled') : ''), s.bullets),
+    notes: noteText(s),
+  }));
   // Only slides that actually have notes get a notes part. An empty notes
   // slide on every slide is legal but shows up in PowerPoint as a deck where
   // every page "has" notes, which is worse than not having the part.
@@ -674,51 +596,29 @@ function noteBlock(slide) {
   return `<div class="notes"><span>Notes</span>${lines}</div>`;
 }
 
+// Plain HTML slideshow, matching the plain .pptx: white slides, a header and
+// bullet points, nothing else. Every slide is the same shape (slide 1 too).
 function buildHtmlSlides(slides, title) {
   const list = (slides && slides.length) ? slides.slice() : [{ title: title || 'Untitled', bullets: [] }];
-  const first = list[0];
-  const headTitle = (first.title || '').trim() || title || 'Untitled';
-  const subtitle = ((first.bullets || []).map((b) => String(b).trim()).filter(Boolean)[0]) || '';
-  const total = list.length;
+  const headTitle = (list[0].title || '').trim() || title || 'Untitled';
 
-  const titleSlide = `<section class="slide title"><div class="bar"></div><div><h1>${xmlEsc(headTitle)}</h1>${subtitle ? `<p class="sub">${xmlEsc(subtitle)}</p>` : ''}</div><div class="dots"><i class="on"></i><i></i><i></i></div></section>`;
-
-  const sec = list.slice(1).map((s, i) => {
+  const sec = list.map((s, i) => {
     const bl = (s.bullets || []).map((b) => String(b)).filter((b) => b.trim());
-    const cards = bl.length && bl.length <= 6
-      ? `<div class="cards">${bl.map((b) => `<div class="card">${xmlEsc(b)}</div>`).join('')}</div>`
-      : (bl.length ? `<ul>${bl.map((b) => `<li>${xmlEsc(b)}</li>`).join('')}</ul>` : '');
-    const frame = s.photo ? '<div class="picspace">Picture goes here</div>' : '';
-    return `<section class="slide"><div class="kicker">${String(i + 2).padStart(2, '0')}</div>
-<div class="row"><div class="txt"><h2>${xmlEsc(s.title || '')}</h2><div class="ul-rule"></div>${cards}</div>${frame}</div>
-<div class="pagenum">${i + 2} / ${total}</div>${noteBlock(s)}</section>`;
+    const head = (s.title || '').trim() || (i === 0 ? title || 'Untitled' : '');
+    const body = bl.length ? `<ul>${bl.map((b) => `<li>${xmlEsc(b)}</li>`).join('')}</ul>` : '';
+    return `<section class="slide"><h2>${xmlEsc(head)}</h2>${body}${noteBlock(s)}</section>`;
   }).join('\n');
 
   return `<!doctype html><html><head><meta charset="utf-8"><title>${xmlEsc(headTitle)}</title>
-<style>body{margin:0;font-family:'Segoe UI',Arial,sans-serif;background:#14181D;color:#E8E6E1}
-.slide{position:relative;min-height:100vh;padding:9vh 7vw;box-sizing:border-box;border-bottom:1px solid #1F252C;display:flex;flex-direction:column;justify-content:center}
-.slide.title{flex-direction:row;align-items:center;gap:34px}
-.bar{width:6px;align-self:stretch;max-height:220px;background:#8CA891;border-radius:3px}
-h1{font-size:60px;margin:0;color:#8CA891;line-height:1.1}
-.sub{font-size:21px;color:#6B7078;margin:16px 0 0}
-.dots{position:absolute;left:7vw;bottom:8vh;display:flex;gap:12px}
-.dots i{width:11px;height:11px;border-radius:50%;background:#1F252C;display:block}
-.dots i.on{background:#8CA891}
-.kicker{position:absolute;top:6vh;left:7vw;font-size:13px;letter-spacing:3px;color:#6B7078;font-weight:600}
-.pagenum{position:absolute;right:7vw;bottom:6vh;font-size:13px;color:#6B7078}
-.row{display:flex;gap:3vw;align-items:stretch}
-.notes{position:absolute;left:7vw;right:7vw;bottom:11vh;border-top:1px solid #1F252C;padding-top:10px;color:#6B7078;font-size:14px;line-height:1.5}
+<style>body{margin:0;font-family:Calibri,'Segoe UI',Arial,sans-serif;background:#ffffff;color:#1a1a1a}
+.slide{position:relative;min-height:100vh;padding:9vh 8vw;box-sizing:border-box;border-bottom:1px solid #e5e5e5;display:flex;flex-direction:column;justify-content:flex-start}
+h2{font-size:44px;margin:0 0 28px;color:#1a1a1a;font-weight:700}
+ul{font-size:24px;line-height:1.6;padding-left:26px;margin:0}
+li{margin-bottom:12px}
+.notes{margin-top:auto;border-top:1px solid #e5e5e5;padding-top:10px;color:#777;font-size:14px;line-height:1.5}
 .notes span{display:block;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:5px}
-.notes p{margin:0 0 5px}
-.txt{flex:1;min-width:0}
-h2{font-size:40px;margin:0 0 14px;color:#8CA891}
-.ul-rule{width:72px;height:5px;background:#8CA891;border-radius:3px;margin-bottom:26px}
-.cards{display:flex;flex-direction:column;gap:12px}
-.card{background:#1F252C;border-radius:14px;padding:20px 24px 20px 34px;font-size:22px;line-height:1.45;position:relative}
-.card::before{content:"";position:absolute;left:14px;top:50%;transform:translateY(-50%);width:5px;height:45%;background:#8CA891;border-radius:3px}
-ul{font-size:21px;line-height:1.7;padding-left:22px}li{margin-bottom:10px}
-.picspace{flex:0 0 34%;border:2px dashed #8CA891;border-radius:14px;background:#1F252C;display:flex;align-items:center;justify-content:center;color:#6B7078;font-size:15px;min-height:300px}</style></head>
-<body>${titleSlide}${sec}</body></html>`;
+.notes p{margin:0 0 5px}</style></head>
+<body>${sec}</body></html>`;
 }
 
 // ---------- format registry ----------------------------------------------
@@ -750,7 +650,6 @@ function slidesToText(slides, title) {
     const label = i === 0 ? 'Title slide' : `Slide ${i + 1}`;
     lines.push(`${label}: ${s.title || (i === 0 ? title || '' : '')}`);
     (s.bullets || []).filter((b) => String(b).trim()).forEach((b) => lines.push(`  • ${b}`));
-    if (s.photo && i > 0) lines.push('  [space left for a picture]');
     lines.push('');
   });
   return lines.join('\n');

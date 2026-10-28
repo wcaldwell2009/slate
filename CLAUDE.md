@@ -1,14 +1,26 @@
 # Slate — School Tracker App — Project Handoff
 
 ## Last Updated
-2026-09-04 (round 69 — copilot launch fixed; Launch Opera opens Slate in that window)
+2026-10-28 (round 75 — copilot edits Word files in place, makes PDFs, captures pictures for them)
 
 ## What this project is
-Slate is a **local desktop app** that helps Will keep on top of school work. It
-logs into Canvas once a day, pulls every assignment/project/test, cleans them
-up, and shows them on dead-simple daily / weekly / projects / tests / grades
-pages. Everything runs and stores on Will's own computer — no website, no cloud,
-no account. Personal use only.
+Slate is a **local desktop app** that helps Will with school work. **As of
+round 74 it is a set of tools, not a Canvas dashboard.** The sidebar has four
+sections — **Documents** (write a paper), **Slideshows** (make a PowerPoint),
+**Copilot** (drive a browser), **Watermarks** — plus **Canvas** (connect) and
+**Admin** as small utilities at the bottom. In Documents/Slideshows you make a
+project, pick the Canvas class + assignment it is for (which pulls the
+instructions in), talk to the on-page Claude about it, and hand it in. Projects
+save and are listed to come back to. Everything runs and stores on Will's own
+computer — no website, no cloud, no account. Personal use only.
+
+**The old dashboard is gone from the UI but not from the code.** Today, Week,
+Tests & Quizzes, Classes and Email were removed from the sidebar and the router
+(round 74). Their render functions (`renderToday`/`renderWeek`/`renderTests`/
+`renderClasses`/`renderEmail` etc.) and ALL their API routes/queries still exist
+— sync still needs `classes()`, and the Canvas assignment picker needs the
+per-class assignment list — they are just no longer routed to. Canvas sync still
+runs hourly to keep classes + assignment instructions available for the picker.
 
 Hard rules from the spec: **never** auto-write assignments, never run an "AI
 detector evasion" pass, never auto-submit work to Canvas. Slate only organizes
@@ -228,6 +240,310 @@ in the prompt as the student's work to critique, never to improve.
 Node (here, inserting a conversation straight into the shots database) before
 the page is photographed, because that server runs with `SLATE_NO_AI=1` and
 cannot have a conversation of its own.
+
+**Round 75 — the copilot makes real documents and edits uploads in place
+(2026-10-28).** Will: it "can't make documents well" — wants well-formatted
+PDFs, to replicate a PDF he gives it with screenshots placed where he says,
+and to read uploads and send them back changed. Evidence for the second: his
+real `SEC 1.2.3 Student Submission.docx` upload came back as
+`SEC 1.2.3 Lab Report - filled.md` — round 72's read-to-text →
+`buildDocx(text)` path threw away every font, list and heading.
+
+**`lib/docxedit.js` edits word/document.xml IN PLACE** (every other part of
+the package byte-for-byte kept). `outline()` numbers OUTERMOST paragraphs
+(text-box paragraphs belong to their outer one) with table/row/cell, list,
+heading and picture marks — that is what `read_file` now returns for a
+.docx. `editDocx` ops: replace (works across Word's split runs; the
+replacement takes the first run's formatting), set_text, append_text,
+insert_after (clones pPr + rPr, drops w14:paraId), insert_image
+('inside' an empty answer paragraph / 'after'), delete (inside a table cell
+it leaves `<w:p/>` — a cell with no paragraph is a corrupt file). **Numbers
+refer to the file as read; all edits are applied against original offsets,
+stitched from the end.** Images: media part + rel + ONE `<Default>` per
+extension (round 8: a duplicate corrupts) + `wp`/`r` namespaces added to the
+root if missing; width from CSS px at 96/in, capped 6.5in. Verified on
+copies of both of his real worksheets: Quick Look render shows original
+numbering/fonts kept, answer under the question, picture in place.
+
+**`lib/pdfmake.js`: HTML → PDF with Chrome's own printToPDF in a SEPARATE
+hidden headless browser** (free port, throwaway profile, started lazily,
+killed on exit) — never a tab in the copilot Opera (9222, Will's browser).
+**Page scripts are disabled** in the printed page: its HTML is built from
+web content. `docs.makePdf` keeps the HTML in `sources/` (with a `<base>`
+at the docs folder so `images/x.png` resolves) so a PDF can be remade, and
+reports `missing_pictures`. The model is told to Read its PDF afterwards to
+check it.
+
+**`capture_image`** (chrome.captureImage) saves a full-res PNG of the tab —
+viewport region, visible screen or full page — into `images/`. **The clip
+must add scrollX/scrollY**: captureScreenshot's clip is document
+coordinates, the model's are viewport. Verified exact on a scrolled page.
+
+Tools: `capture_image` (browser server), `edit_docx`, `make_pdf` (docs
+server). `FILE_TOOLS` results carry `file` on `tool_done` → the chat shows a
+file card (Preview / Open). Documents view previews PDFs/pictures in an
+iframe via `/api/docs/file` (name checked through docPath); Office files
+preview as text. `readFile` now resolves bare names against DOCS_DIR.
+
+**`npm run check:docs:live`** (in browser-copilot/, ~$1.30 on sonnet): two
+real turns on a throwaway server + headless browser + temp docs dir — Word
+worksheet filled + cropped capture under the right question (every original
+line kept, no save_document), and a PDF worksheet rebuilt with the capture
+inside question 1's box. All green; outputs eyeballed. UI screenshotted on a
+throwaway rig, no page errors. The copilot on 4321 was not running, so
+nothing to restart — next start picks it up. Not committed.
+
+**Round 74 — Slate restructured into tool sections (2026-09-20).** Will: "i
+just want it to be an app that compiles a bunch of tools that help with school
+now." Remove Today/Week/Tests/Classes/Email; keep four sections — the written-
+document maker, the PowerPoint maker, Copilot, Watermarks — and in each, click
+"New", pick a Canvas class + assignment for the instructions, and chat with the
+on-page Claude about it; projects save and reopen. Pre-save one slideshow from
+his filled-in "Secular Ethics Presentation". Confirmed with him via
+AskUserQuestion: keep Canvas + Admin as small bottom utilities; the section
+lists show ONLY user-created projects (Canvas assignments are just picker
+data); names are Documents / Slideshows / Copilot / Watermarks.
+
+**THE DATA MODEL: a user project is an `assignments` row with `source='user'`.**
+New columns (db.js): `source` ('canvas' default / 'user'), `linked_assignment_id`,
+`linked_assignment_name`, `updated_at`. A user project leaves
+`canvas_assignment_id` NULL — and sync keys every upsert on canvas_assignment_id,
+so it NEVER touches user rows (no source guard needed). It can be LINKED to a
+Canvas assignment for instructions: that id goes in `linked_assignment_id`, NOT
+canvas_assignment_id (which is UNIQUE and owned by sync — reusing it would
+collide). `refreshFromCanvas` now falls back to linked_assignment_id, so the
+chat's first-message refresh works on user projects too.
+
+**class_id is NOT NULL in the schema, so a new project starts on the first
+class** (createUserProject) and the picker changes it — a full table rebuild to
+make it nullable was not worth the risk on his real data. `assignmentDetail` and
+`projectDetail` became LEFT JOIN so an as-yet-unlinked project still loads.
+**`fileList` had to guard `parseJson(row.files, []) || []`** — a user row has
+files=NULL, and `JSON.parse("null")` is `null`, not the fallback, so `.map`
+threw. Canvas rows never hit that because sync always writes a JSON string.
+
+**New api.js:** createUserProject / listUserProjects / renameProject /
+deleteProject / classChoices / canvasAssignmentsForClass / linkCanvasAssignment
+/ ensureStarterProjects. **New server routes:** GET+POST `/api/documents`,
+POST `/api/documents/:id/{rename,delete,link}`, GET `/api/canvas/classes`,
+GET `/api/canvas/classes/:id/assignments`. saveDraft/saveSlides bump updated_at
+for user rows so the lists sort most-recent-first.
+
+**The pre-saved deck:** `ensureStarterProjects()` (called at boot after
+ensureSeeded) copies a `build_mode='slides'` row whose title matches "secular
+ethics" into a fresh `source='user'` slideshow, once (guarded by the
+`seeded_starter_projects` setting). It NO-OPS on the mock/test DBs (no such
+deck) and on his real DB it made id 123 with all 8 filled slides under the
+Bible class. Copied, not converted, so the original Canvas row is left for sync.
+
+**Frontend:** VIEWS now routes only documents/slideshows/work/project/copilot/
+marks/api/admin. `renderSection('doc'|'slides')` lists user projects + a New
+button; `openProject` opens the work view for docs, project view for slides.
+`projectSetup(detail, kind)` is the editable title + class/assignment picker,
+shown at the top of the work/project pages when `source==='user'`; picking an
+assignment POSTs `/link` (pulls instructions) and re-renders. **Use
+`document.createElement('option')`, NOT `new Option` — the drive DOM shim has no
+Option constructor** (this bit once). Back buttons + complete actions go to
+documents/slideshows (all the old `state.view='today'`/`'projects'` fallbacks
+were repointed). index.html nav is the six buttons; `.tab-util` styles Canvas +
+Admin small.
+
+**Verified:** headless walkthrough (real Opera) of New document → pick class →
+assignments load → pick assignment → instructions pulled → listed with class +
+assignment; screenshots eyeballed. `npm test` 108/5 (the 5 = round 51c guards).
+`npm run drive` api 516 / **ui 272** (0 js errors) after rewriting the UI
+harness — removed the Today/Week/Tests/Classes/Email/Class-notes sections, fixed
+the view sweeps + tab list + nav-return assertions, added a Documents +
+Slideshows section. `npm run shots` gained documents/slideshows/new-document,
+dropped the removed-view steps. Mock `listAssignments` gained the Number-coerce
+`getAssignment` already had (a string course id matched nothing). His real 4173
+DB was FULLY BACKED UP (db+wal+shm to `data/backup-round74-*`) before the
+migration ran on it. Not committed.
+
+**Round 73 — the PowerPoint maker outputs a plain, blank deck (2026-09-20).**
+Will: "make it so that the powerpoint maker just makes a blank presentation
+with just the bullet points and header." The .pptx builder was heavily
+designed — dark Slate background, rounded bullet "cards" with accent tabs,
+two-digit kickers, slide-number footers, a title slide with a dot motif, and
+per-slide "leave space for a picture" frames. Now every slide (slide 1
+included) is the default Title + Content layout: the **title placeholder** is
+the header, the **content placeholder** holds one bullet per line, on the
+master's white background. No colours, cards, kickers, footers, frames.
+
+**WHY PLACEHOLDERS, not drawn text boxes:** using the layout's real
+`<p:ph type="title"/>` and `<p:ph idx="1"/>` is what makes it a genuine blank
+deck — bullets appear in Outline view, the whole thing is theme-able (drop any
+PowerPoint theme and it restyles), and the master's bodyStyle supplies the
+bullet char/indent/fonts/black-on-white. Removing the per-slide `<p:bg>`
+override is what makes it white (it inherits `bgRef idx="1001"` → bg1 → white).
+Verified with **python-pptx** (a strict OPC parser — it opens the package on
+load): 3 slides, each with a TITLE placeholder + OBJECT placeholder, headers
+and bullets read back correct, notes preserved only where present; an 8-bullet
+slide and an empty-title fallback deck both open clean.
+
+`officegen.js`: `titleSlideXml`/`contentSlideXml`/`slideDoc` and all the drawn-
+shape helpers (`run`/`panelShape`/`pictureFrame`/`rectShape`/`textShape`/
+`bulletPara`, the `C_*` colours, `MARGIN`, `CONTENT_W`) were **deleted** —
+replaced by `titlePh`/`bodyPh`/`plainSlideXml`. `buildHtmlSlides` and
+`slidesToText` went plain to match. The master/layout/theme parts and the
+whole notes-slide machinery (round 53) are unchanged.
+
+**THE `photo` FIELD IS FULLY GONE, not just ignored.** "Leave space for a
+picture" made no sense in a blank deck, so the toggle, the field and its CSS
+were removed everywhere: the editor checkbox + `.pic-toggle` CSS (app.js/
+styles.css), `saveSlides` and `seedSlides` (api.js), `titlesToSlides`
+(outline.js), the app.js `normalize`/push objects. Old saved decks with a
+stray `photo` key are harmless — the whitelist just drops it.
+
+**Preview kept in lockstep (the round 44/45 rule):** `slideStage` + the `pv-*`
+CSS now draw a plain white slide, bold black header, plain `<ul>` bullets —
+uniform for every slide, no special title slide, no cards, no >6-bullet
+fallback (it's always a list now). Eyeballed via `npm run shots`
+(slides-handin, slides-handin-slide3, slides-editor): white slides, headers,
+bullets, and the editor no longer shows a picture toggle.
+
+**Tests updated to pin the plain output** (they had pinned the styled one, on
+purpose — this is a deliberate behaviour change): smoke.test.js asserts real
+placeholders + no brand colours/cards/kickers/footers; drive api.js/ui.js drop
+the picture-space and photo-toggle checks and assert placeholders + absence of
+frames instead. `npm test` 108/5 (the 5 are the round 51c guard tests, still
+red by design), `npm run drive` api 516 / ui 385, all green.
+
+**Round 72 — the copilot reads and edits uploaded Office files
+(2026-09-11).** Will: "the feature where I upload a file doesn't work. claude
+should be able to read and edit files I upload." The upload endpoint and the
+paperclip flow were fine — files landed in `~/Documents/Browser Copilot/
+attachments` (two of his real `.docx` were sitting there). The gap: the
+session only had the built-in `Read` tool, which handles text/images/PDFs but
+NOT Office files (a `.docx` is a ZIP, so Read saw raw bytes). And there was no
+way to write an edited file back.
+
+**`lib/office.js`** — ZERO-dep read of `.docx`/`.pptx`/`.xlsx` to text and
+write of a plain `.docx`, ported from Slate's `src/attachments.js` (central-
+directory ZIP walk + `zlib.inflateRawSync`, XML→text) and `src/officegen.js`
+(`makeZip`/`crc32`/`buildDocx`). Slate's `buildDocx` is the version already
+verified in real Word (round 33/34), so the bytes are trustworthy; macOS
+`textutil` also parses both the generated file and his real uploads.
+
+**Two docs-server tools added (`lib/claude.js`):** `read_file(path)` reads any
+attachment except PDFs/images (Office + text/csv/json/md); `save_document`
+now writes a real Word file when the name ends in `.docx` (via
+`office.buildDocx`), which is how an edit goes back openable. `docs.readFile`
+resolves the path and REQUIRES it inside `DOCS_DIR`, so a reply cannot point
+it at an arbitrary file. **Editing is copy-out, not in place** — it always
+saves a NEW file in the Documents folder (the upload under `attachments/` is
+left alone); the prompt tells it to add "edited" to the name unless asked to
+overwrite. The system prompt's Documents section and the per-attachment
+header line now steer Office/text → `read_file`, PDF/image → `Read`.
+
+**Verified live (haiku, ~16c) on a throwaway server:** uploaded a `.docx`
+with a typo, asked to fix spelling and save as Word → it called `read_file`
+(not Read), then `save_document book report edited.docx`; the saved file read
+back as a valid Word doc with "stroy"→"story" fixed and the marker line
+intact, and `textutil` opened it. `lib/office.js` also unit-round-trips
+(buildDocx→docxText) and reads his real uploaded submission (1916 chars).
+Live copilot on 4321 restarted clean. Not committed.
+
+**Round 71 — a Mac Desktop launcher (2026-09-10).** Will: "put something
+that opens the app in opera on my desktop." `tools/mac-launcher/build.sh`
+compiles `Slate.applescript` into `~/Desktop/Slate.app` (osacompile, icon
+from `branding/slate-mark-dark-1024.png` via sips + iconutil — stock tools,
+no admin). The applet: probe 4173, start `server.js` if down (with
+`SLATE_OPEN=0` so the server does not ALSO open the default browser; node
+from `~/.local/lib/nodejs/current/bin`, Finder's PATH has none); probe 4321,
+start the copilot server if down; POST `/api/launch-chrome {startUrl}` —
+round 69's route, which starts the copilot Opera if needed (~30s cold) and
+makes sure a Slate tab exists; then PUT `/json/activate/<id>` on 9222 to
+front that tab and `open -a Opera` to front the window. Fallback if the
+copilot cannot come up: `open -a Opera <url>`. Logs in `~/Library/Logs/
+slate-launcher.log` / `slate-copilot-launcher.log`. Servers started this
+way have a clean Finder environment — the round 69 rule by construction.
+
+**WHY IT GOES THROUGH THE COPILOT, NOT `open -a Opera <url>`:** the first
+build did `open -a Opera <url>` and Will got "it opens the localhost but the
+screen is black". The only Opera running was the copilot instance (custom
+`--user-data-dir`), the page renders fine in a clean browser (checked
+headless, no exceptions), and no localhost tab appeared on 9222 — so the URL
+was handed to an Opera that put up a black window. Not diagnosed further:
+that would have needed his screen, and **Will does not want screen
+recording** — a `screencapture` attempt triggered the macOS permission
+prompt and he said no. Do not use `screencapture` or System Events
+automation here again; verify through the copilot's CDP port (read-only
+screenshots of a tab are fine) or a throwaway headless browser.
+
+**TRAP that cost the first build:** in AppleScript's `do shell script`, a
+backgrounded `cd X && nohup node … > log 2>&1 &` still HANGS the applet
+until Slate exits, because the `&` backgrounds a subshell running the whole
+list and only node's fds were redirected — the subshell keeps the script's
+pipe open. Redirect the whole subshell: `(cd X && nohup node …) > log 2>&1
+< /dev/null &`. Verified: cold start on a throwaway port/DB (~1s), warm
+path, and the real icon — a Slate tab appeared on 9222 and a CDP screenshot
+of it showed the Today page, front and drawn. Windows still uses the round
+19 installer; this is Mac-only.
+
+**Round 70 — the copilot got eyes and hands for canvas pages, and
+screenshots to the Desktop (2026-09-09).**
+
+Will pasted an explanation of why the copilot could not work a screen that
+is a browser-based remote desktop (Guacamole / noVNC: WebSocket to a
+gateway, framebuffer painted onto a `<canvas>`, real mouse/keyboard events
+on the canvas forwarded back) and asked for "the tools described". That is
+option (b) from his paste — treat the canvas as pixels — with one
+simplification: **CDP input events go through the browser's own event
+pipeline**, so the canvas's listeners fire exactly as for a human and the
+page forwards them down its socket. No OS-level events, no protocol client.
+
+All in `browser-copilot/`. `lib/chrome.js` gained `screenshot(id, {save,
+name})`, `clickAt`, `moveMouse`, `drag`, `scrollAt`, `typeText`,
+`pressKeys`; `lib/claude.js` exposes them as `click_at`, `move_mouse`,
+`drag`, `scroll_at`, `type_text`, `wait`, a broadened `press_key`
+(any key or combo — `ctrl+alt+Delete`, `shift+Tab`, `F5`; one non-modifier
+per call, unknown names refused rather than guessed) and `screenshot` with
+`save`/`name`. The system prompt has a "pages that are just a picture"
+section: look → act by coordinate → wait → look again, never assume a
+canvas action worked.
+
+**The screenshot the model sees is captured at CSS-pixel size** (clip
+`scale: 1/devicePixelRatio`), so a point read off the image IS the page
+coordinate — on Will's retina Air a raw capture is 2x and every click would
+land at half the distance. The saved PNG is full resolution. **`screenshot`
+no longer calls `bringToFront`** — captureScreenshot re-renders a hidden
+tab (round 64), and fronting was the round 62 complaint.
+
+**`type_text` is real keystrokes, not `insertText`.** `insertText` only
+tells an editable element to insert; a canvas listening for `keydown` never
+hears it. Each character is keyDown(+text)/keyUp with `key`, `code`,
+`windowsVirtualKeyCode` and Shift for capitals/symbols (US layout);
+anything not on a US keyboard still goes through insertText.
+
+**HEADLESS TRAP, measured 2026-09-09:** in `--headless=new` (Opera 135 and
+Chrome alike) a keyDown with text on a focused NON-editable element floods
+the page with thousands of keydown/keypress pairs a second — no `repeat`
+flag, not auto-repeat rate — and the next CDP call hangs. An `<input>` is
+clean; a headful window is clean (keydown, keypress, keyup, done); a page
+that `preventDefault`s keydown (noVNC and Guacamole both do) is clean. Real
+use is headful, so the tools are right; the rig page preventDefaults. If a
+test ever hangs inside typeText, this is why.
+
+**`nativeVirtualKeyCode` is NOT sent.** On macOS Chrome reads it as the
+platform keycode, and 72 (`h`) is Volume Up — the probe log showed
+`AudioVolumeUp` keydowns interleaved with the letters.
+
+Saved shots: `DESKTOP_DIR` (env `COPILOT_DESKTOP_DIR`, then
+`SLATE_DESKTOP_DIR`, then `~/Desktop`); `shotPath` flattens the name to a
+basename, defaults to "Screenshot <tab title> <stamp>.png", and numbers
+rather than overwrites.
+
+**Checks, both in the repo:** `npm run check:pixel` (28, throwaway headless
+browser on its own port/profile + temp Desktop; never 9222) and
+`npm run check:pixel:live` (one haiku turn, ~15¢, through a throwaway
+copilot server on that rig: fake lab login canvas — Claude screenshot,
+`click_at` 448,280 inside the drawn box, `type_text student42` which the
+canvas rendered, `screenshot {save, name:"lab proof"}`). The first live run
+ignored the requested file name; one prompt line fixed it.
+
+The copilot on 4321 was restarted with the CLAUDE env stripped (round 69
+rule) so the new tools are live. Not committed — Will did not ask.
 
 **Round 69 — "Launch Opera" errored; the servers were the problem
 (2026-09-04).**
@@ -2345,6 +2661,48 @@ Open, all offered and none refused — just not answered yet:
 - Will's instruction in a message IS approval.
 
 ## Activity Log
+- **2026-10-28 (round 75)** — Copilot documents: uploaded Word files are now
+  edited in place (formatting kept, answers and pictures dropped in by
+  paragraph number) instead of rebuilt as plain text; new make_pdf prints
+  Claude's HTML layouts to real PDFs in a hidden browser (also how it copies
+  an uploaded PDF with screenshots added); capture_image grabs cropped
+  pictures of a tab for them; finished files come back as chat cards. Live
+  two-turn check green on a throwaway rig.
+- **2026-09-20 (round 74)** — Restructured Slate from a Canvas dashboard into a
+  set of tools: removed Today/Week/Tests/Classes/Email; the sections are now
+  Documents, Slideshows, Copilot, Watermarks (Canvas + Admin as bottom
+  utilities). New projects: click New, pick a Canvas class + assignment for the
+  instructions, chat with the on-page Claude, save and reopen. User projects are
+  `source='user'` assignments rows; added the columns, endpoints, picker UI, and
+  a pre-saved "Secular Ethics Presentation" slideshow (id 123 on his DB, backed
+  up first). Rewrote the drive UI harness + shots to match. npm test 108/5,
+  drive api 516 / ui 272 green.
+- **2026-09-20 (round 73)** — Made the PowerPoint maker output a plain, blank
+  deck (header + bullets on white, default placeholders, theme-able) instead
+  of the designed dark deck with cards/kickers/footers/picture frames. Removed
+  the "leave space for a picture" feature and the `photo` field entirely.
+  Preview, HTML export and text export all match. Verified the .pptx with
+  python-pptx and eyeballed the preview. Tests re-pinned to the plain output;
+  npm test 108/5 (5 = round 51c guards), drive api 516 / ui 385 green.
+- **2026-09-11 (round 72)** — Fixed uploading files to the copilot: it now
+  reads Word/PowerPoint/Excel attachments (not just text/PDF/images) and can
+  edit them, saving the changed version as a real Word file on the Documents
+  tab. Zero-dep Office read/write ported from Slate. Verified with a live
+  turn: uploaded a Word doc, got back a corrected Word doc.
+- **2026-09-10 (round 71)** — Slate.app on the Mac Desktop: opens Slate in
+  the copilot's Opera window, starting Slate and the copilot first if
+  needed. First cut handed the URL to Opera directly and gave a black page;
+  now it goes through Launch Opera's route and fronts the tab. Will declined
+  screen recording; verified through the copilot's port instead. Found and
+  documented the do-shell-script backgrounding trap. Also put the website link in the
+  outreach bot's email signature (separate repo, committed, not pushed).
+- **2026-09-09 (round 70)** — The copilot can now work pages that are just
+  a picture (browser remote desktops, virtual labs, canvases): it looks with
+  a screenshot and acts by coordinate — click, drag, scroll, real keystrokes,
+  key combos, wait, look again. Screenshots can be saved full-size to the
+  Desktop by name. Found and documented a headless-only keystroke flood
+  while testing. 28 rig checks + one live haiku turn green; copilot on 4321
+  restarted clean. Not committed.
 - **2026-09-04 (round 69)** — Launch Opera was failing: both servers had
   been left running as children of an old Claude Code session and Opera
   would not start from them, and the launch gave up after 10s when a cold

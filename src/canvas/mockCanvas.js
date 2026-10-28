@@ -306,13 +306,16 @@ async function getAssignment(courseId, assignmentId) {
   return all.find((x) => String(x.id) === String(assignmentId)) || null;
 }
 async function listAssignments(courseId) {
+  // canvas_class_id is TEXT, but the fixture keys courses numerically — coerce,
+  // the same way getAssignment does, or a string id matches nothing.
+  const cid = Number(courseId) || courseId;
   // Real Canvas assignments carry an assignment_group_id. The fixture doesn't
   // spell one out per assignment — big work goes in Summative, everything else
   // in Formative, which is how the real classes are actually laid out.
-  const groups = ASSIGNMENT_GROUPS[courseId] || [];
+  const groups = ASSIGNMENT_GROUPS[cid] || [];
   const formative = groups.find((g) => /formative/i.test(g.name)) || groups[0];
   const summative = groups.find((g) => /summative/i.test(g.name)) || groups[0];
-  return ASSIGNMENTS.filter((a) => a.course_id === courseId).map((a) => {
+  return ASSIGNMENTS.filter((a) => a.course_id === cid).map((a) => {
     const home = (a.points_possible || 0) >= 50 ? summative : formative;
     return { ...a, assignment_group_id: a.assignment_group_id || (home ? home.id : null) };
   });

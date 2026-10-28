@@ -248,7 +248,7 @@ function assignmentDetail(id) {
   const row = db
     .prepare(
       `SELECT a.*, c.name AS class_name, c.weight
-       FROM assignments a JOIN classes c ON c.id = a.class_id WHERE a.id = ?`
+       FROM assignments a LEFT JOIN classes c ON c.id = a.class_id WHERE a.id = ?`
     )
     .get(id);
   if (!row) return null;
@@ -275,6 +275,10 @@ function assignmentDetail(id) {
     doc_style: docStyle(row),
     instructions_ai: row.instructions_simple || null,
     instructions_plain: require('./simplify').ruleBased(plainDescription),
+    source: row.source || 'canvas',
+    class_id: row.class_id || null,
+    linked_assignment_id: row.linked_assignment_id || null,
+    linked_assignment_name: row.linked_assignment_name || null,
   };
 }
 
@@ -283,7 +287,9 @@ function assignmentDetail(id) {
 // can read the inside of it, and whether it's already on disk.
 function fileList(row) {
   const att = require('./attachments');
-  const files = parseJson(row.files, []);
+  // A user project has files=NULL; JSON.parse("null") is null, not the
+  // fallback, so guard it or .map throws.
+  const files = parseJson(row.files, []) || [];
   return files.map((f, i) => ({
     index: i,
     name: f.name,
@@ -385,9 +391,12 @@ async function ensureSimplified(id) {
 async function refreshFromCanvas(id) {
   const db = getDb();
   const row = db
-    .prepare('SELECT id, class_id, canvas_assignment_id, raw_description, files FROM assignments WHERE id=?')
+    .prepare('SELECT id, class_id, canvas_assignment_id, linked_assignment_id, raw_description, files FROM assignments WHERE id=?')
     .get(Number(id));
-  if (!row || !row.canvas_assignment_id) return { ok: false, reason: 'no Canvas id' };
+  // A user project keeps the assignment it is linked to in linked_assignment_id
+  // (canvas_assignment_id is owned by sync); either one is a valid id to fetch.
+  const canvasId = (row && (row.canvas_assignment_id || row.linked_assignment_id)) || null;
+  if (!row || !canvasId) return { ok: false, reason: 'no Canvas id' };
 
   const { canvasMode, getClient } = require('./canvas/canvasClient');
   if (canvasMode() === 'none') return { ok: false, reason: 'Canvas is not connected' };
@@ -400,7 +409,7 @@ async function refreshFromCanvas(id) {
 
   let fresh;
   try {
-    fresh = await client.getAssignment(cls.canvas_class_id, row.canvas_assignment_id);
+    fresh = await client.getAssignment(cls.canvas_class_id, canvasId);
   } catch (e) {
     console.warn('[chat] Canvas refresh failed:', e.message);
     return { ok: false, reason: e.message };
@@ -475,6 +484,7 @@ function saveDraft(id, text, html) {
     db.prepare('UPDATE assignments SET draft_text=? WHERE id=?').run(plain, id);
   }
   try { recordSnapshot(db, id, plain); } catch { /* history is a nice-to-have */ }
+  db.prepare("UPDATE assignments SET updated_at=? WHERE id=? AND source='user'").run(new Date().toISOString(), id);
   return { ok: true };
 }
 
@@ -1031,7 +1041,7 @@ function essayPercent(row) {
 function projectDetail(id) {
   const db = getDb();
   const row = db
-    .prepare('SELECT a.*, c.name AS class_name FROM assignments a JOIN classes c ON c.id=a.class_id WHERE a.id=?')
+    .prepare('SELECT a.*, c.name AS class_name FROM assignments a LEFT JOIN classes c ON c.id=a.class_id WHERE a.id=?')
     .get(id);
   if (!row) return null;
   let slides = parseJson(row.slides_json, null);
@@ -1040,6 +1050,10 @@ function projectDetail(id) {
     id: row.id,
     title: row.title,
     class_name: row.class_name,
+    source: row.source || 'canvas',
+    class_id: row.class_id || null,
+    linked_assignment_id: row.linked_assignment_id || null,
+    linked_assignment_name: row.linked_assignment_name || null,
     points: row.points,
     due_date: row.due_date,
     due_at: row.due_at || null,
@@ -1199,8 +1213,8 @@ function seedSlides(row) {
   const db = getDb();
   const cls = db.prepare('SELECT name FROM classes WHERE id=?').get(row.class_id);
   return [
-    { title: row.title, bullets: [cls ? cls.name : ''], photo: false, notes: '' },
-    { title: '', bullets: [''], photo: false, notes: '' },
+    { title: row.title, bullets: [cls ? cls.name : ''], notes: '' },
+    { title: '', bullets: [''], notes: '' },
   ];
 }
 
@@ -1209,7 +1223,6 @@ function saveSlides(id, slides) {
     ? slides.map((s) => ({
       title: String(s.title || ''),
       bullets: (s.bullets || []).map((b) => String(b)),
-      photo: !!s.photo,
       // Speaker notes. This map is a whitelist, so a field missing from it
       // is silently dropped on every autosave — which is what would happen
       // to notes typed into the builder if this line were not here.
@@ -1217,6 +1230,7 @@ function saveSlides(id, slides) {
     }))
     : [];
   getDb().prepare('UPDATE assignments SET slides_json=? WHERE id=?').run(JSON.stringify(clean), id);
+  getDb().prepare("UPDATE assignments SET updated_at=? WHERE id=? AND source='user'").run(new Date().toISOString(), id);
   return { ok: true, count: clean.length };
 }
 
@@ -1643,6 +1657,157 @@ function disconnectCanvas() {
   return { ok: true, ...canvasSettings() };
 }
 
+// ---- user-made projects (round 74) ---------------------------------------
+// A "document" or "slideshow" the person creates in Slate, rather than one
+// pulled from Canvas by sync. Same assignments table, marked source='user',
+// with canvas_assignment_id left NULL so sync never touches it. It can be
+// linked to a Canvas assignment for its instructions (linked_assignment_id).
+
+function touchProject(db, id) {
+  db.prepare('UPDATE assignments SET updated_at=? WHERE id=?').run(new Date().toISOString(), id);
+}
+
+// kind: 'doc' (a written document, opens the text editor) or 'slides' (a
+// slideshow, opens the slide builder). Starts with no class — the person
+// picks one, and a Canvas assignment, inside the project.
+function createUserProject(kind) {
+  const db = getDb();
+  const isSlides = kind === 'slides';
+  const now = new Date().toISOString();
+  // class_id is NOT NULL in the schema, so a new project starts on the first
+  // class; the picker inside the project lets the person change it (and pick a
+  // Canvas assignment for the instructions). No classes yet = nothing to hang
+  // a project on, so ask them to connect Canvas first.
+  const first = db.prepare('SELECT id FROM classes WHERE archived=0 ORDER BY name LIMIT 1').get();
+  if (!first) return { ok: false, error: 'Connect Canvas first so there is a class to put this under.' };
+  const info = db.prepare(
+    `INSERT INTO assignments
+       (class_id, canvas_assignment_id, title, raw_title, description, raw_description, steps, files,
+        type, points, due_date, status, work_mode, build_mode, source, updated_at)
+     VALUES (?, NULL, ?, ?, '', '', '[]', '[]', 'regular', 0, NULL, 'todo', ?, ?, 'user', ?)`
+  ).run(
+    first.id,
+    isSlides ? 'Untitled slideshow' : 'Untitled document',
+    isSlides ? 'Untitled slideshow' : 'Untitled document',
+    isSlides ? 'guide' : 'text',
+    isSlides ? 'slides' : 'none',
+    now,
+  );
+  return { ok: true, id: info.lastInsertRowid, kind };
+}
+
+// The list for a section. kind 'doc' -> written documents; 'slides' -> decks.
+function listUserProjects(kind) {
+  const db = getDb();
+  const where = kind === 'slides' ? "build_mode='slides'" : "build_mode<>'slides'";
+  const rows = db.prepare(
+    `SELECT a.id, a.title, a.updated_at, a.linked_assignment_name, c.name AS class_name
+       FROM assignments a LEFT JOIN classes c ON c.id=a.class_id
+      WHERE a.source='user' AND ${where}
+      ORDER BY COALESCE(a.updated_at, '') DESC, a.id DESC`
+  ).all();
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title || (kind === 'slides' ? 'Untitled slideshow' : 'Untitled document'),
+    class_name: r.class_name || null,
+    linked_assignment_name: r.linked_assignment_name || null,
+    updated_at: r.updated_at || null,
+  }));
+}
+
+function renameProject(id, title) {
+  const db = getDb();
+  const row = db.prepare("SELECT id FROM assignments WHERE id=? AND source='user'").get(Number(id));
+  if (!row) return { ok: false, error: 'not a project you can rename' };
+  const clean = String(title || '').trim().slice(0, 200) || 'Untitled';
+  db.prepare('UPDATE assignments SET title=?, raw_title=? WHERE id=?').run(clean, clean, row.id);
+  touchProject(db, row.id);
+  return { ok: true, title: clean };
+}
+
+function deleteProject(id) {
+  const db = getDb();
+  const row = db.prepare("SELECT id FROM assignments WHERE id=? AND source='user'").get(Number(id));
+  if (!row) return { ok: false, error: 'not a project you can delete' };
+  db.prepare('DELETE FROM assignments WHERE id=?').run(row.id);
+  return { ok: true };
+}
+
+// The classes to choose from, plainly (id + name), active ones only.
+function classChoices() {
+  const db = getDb();
+  return db.prepare('SELECT id, name FROM classes WHERE archived=0 ORDER BY name')
+    .all()
+    .map((c) => ({ id: c.id, name: c.name }));
+}
+
+// The Canvas assignments in one class, for the assignment picker. Straight from
+// Canvas (not the local table), so it lists everything the teacher posted, not
+// only what sync decided to keep. Fail-soft: an unreachable Canvas returns [].
+async function canvasAssignmentsForClass(classId) {
+  const db = getDb();
+  const cls = db.prepare('SELECT canvas_class_id FROM classes WHERE id=?').get(Number(classId));
+  if (!cls || !cls.canvas_class_id) return [];
+  const { canvasMode, getClient } = require('./canvas/canvasClient');
+  if (canvasMode() === 'none') return [];
+  try {
+    const list = await getClient().listAssignments(cls.canvas_class_id);
+    return (list || []).map((a) => ({ id: String(a.id), name: a.name || a.title || `Assignment ${a.id}` }));
+  } catch (e) {
+    console.warn('[projects] could not list Canvas assignments:', e.message);
+    return [];
+  }
+}
+
+// Link a user project to a class + Canvas assignment, and pull that
+// assignment's instructions in. Keyed on linked_assignment_id so it never
+// collides with the UNIQUE canvas_assignment_id sync owns.
+async function linkCanvasAssignment(id, classId, assignmentId, assignmentName) {
+  const db = getDb();
+  const row = db.prepare("SELECT id FROM assignments WHERE id=? AND source='user'").get(Number(id));
+  if (!row) return { ok: false, error: 'not a project you can link' };
+  const cls = db.prepare('SELECT id, name, canvas_class_id FROM classes WHERE id=?').get(Number(classId));
+  if (!cls) return { ok: false, error: 'unknown class' };
+
+  db.prepare('UPDATE assignments SET class_id=?, linked_assignment_id=?, linked_assignment_name=? WHERE id=?')
+    .run(cls.id, assignmentId ? String(assignmentId) : null, assignmentName ? String(assignmentName).slice(0, 300) : null, row.id);
+  touchProject(db, row.id);
+
+  let pulled = false;
+  if (assignmentId) {
+    const r = await refreshFromCanvas(row.id);
+    pulled = !!(r && r.ok);
+  }
+  return { ok: true, class_name: cls.name, pulled };
+}
+
+// A pre-saved slideshow for the Slideshows section, seeded once from a deck
+// Will already filled in ("Secular Ethics Presentation"). Copies its slides
+// into a fresh user project so the original Canvas row is left alone. No-ops on
+// a database that doesn't have that deck (the test/mock DBs), and never runs
+// twice (guarded by a setting).
+function ensureStarterProjects() {
+  const db = getDb();
+  try {
+    if (getSetting('seeded_starter_projects')) return;
+    const src = db.prepare(
+      "SELECT title, slides_json, class_id FROM assignments WHERE build_mode='slides' AND slides_json IS NOT NULL AND lower(title) LIKE '%secular ethics%' ORDER BY id LIMIT 1"
+    ).get();
+    if (src && src.slides_json) {
+      const now = new Date().toISOString();
+      db.prepare(
+        `INSERT INTO assignments
+           (class_id, canvas_assignment_id, title, raw_title, description, raw_description, steps, files,
+            type, points, due_date, status, work_mode, build_mode, slides_json, source, updated_at)
+         VALUES (?, NULL, ?, ?, '', '', '[]', '[]', 'regular', 0, NULL, 'todo', 'guide', 'slides', ?, 'user', ?)`
+      ).run(src.class_id || null, src.title, src.title, src.slides_json, now);
+    }
+    setSetting('seeded_starter_projects', '1');
+  } catch (e) {
+    console.warn('[projects] starter seed skipped:', e.message);
+  }
+}
+
 module.exports = {
   status,
   todayAssignments, todayPlan, assignmentDetail, completeAssignment, reopenAssignment, addTime,
@@ -1659,4 +1824,7 @@ module.exports = {
   classes, classDetail, gpa,
   emails, emailDetail,
   canvasSettings, connectCanvas, disconnectCanvas,
+  createUserProject, listUserProjects, renameProject, deleteProject,
+  classChoices, canvasAssignmentsForClass, linkCanvasAssignment,
+  ensureStarterProjects,
 };
