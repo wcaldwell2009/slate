@@ -41,6 +41,12 @@ async function startPrinter() {
   ], { stdio: 'ignore' });
   const cleanup = () => { try { child.kill(); } catch { /* gone */ } };
   process.once('exit', cleanup);
+  // 'exit' does not run when the server is killed by a signal, and an
+  // orphaned headless browser then lives on forever. Take it down, then let
+  // the signal do what it would have done.
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.once(sig, () => { cleanup(); process.kill(process.pid, sig); });
+  }
   child.on('exit', () => {
     printer = null;
     fs.rm(profile, { recursive: true, force: true }, () => {});
