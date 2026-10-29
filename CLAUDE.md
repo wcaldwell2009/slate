@@ -241,6 +241,21 @@ Node (here, inserting a conversation straight into the shots database) before
 the page is photographed, because that server runs with `SLATE_NO_AI=1` and
 cannot have a conversation of its own.
 
+**Round 75b — one Opera again (2026-10-29).** Will's dropdown showed the
+copilot Opera's stale restored tabs (Common App/Canvas login pages) while he
+was working in his everyday Opera (default profile — unattachable, round
+61). Launching Slate.app had started the copilot Opera as a second window.
+He chose "merge into one Opera": both Operas were closed gracefully (CDP
+`Browser.close` for 9222, SIGTERM for his everyday one), the old copilot
+profile moved to `~/.browser-copilot-opera.backup-2026-10-29`, and his live
+profile re-rsynced into `~/.browser-copilot-opera` (Singleton*/caches/crash
+reports excluded, round 61 recipe). Relaunched via Slate.app: the copilot
+now lists his real tabs (SCM Investments, Outlook signed in, Slate).
+**From now on he opens Opera with the Desktop Slate icon, not the Opera
+icon** — the Opera icon starts the default profile again and the two drift.
+If he reports this again, check `pgrep -fl Opera` for a second instance
+first. The real long-term fix (offered, not chosen) is an Opera extension.
+
 **Round 75 — the copilot makes real documents and edits uploads in place
 (2026-10-28).** Will: it "can't make documents well" — wants well-formatted
 PDFs, to replicate a PDF he gives it with screenshots placed where he says,
