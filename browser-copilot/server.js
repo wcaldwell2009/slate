@@ -13,6 +13,7 @@ import * as docs from './lib/docs.js';
 import * as chats from './lib/chats.js';
 import { MODELS, currentModel, writeSettings } from './lib/settings.js';
 import { ChatSession } from './lib/claude.js';
+import { getSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 4321;
@@ -187,21 +188,45 @@ function flushTurn(chatId, session) {
   }
 }
 
-function getSession(chatId) {
+// A chat coming back (server restart, idle reaping) RESUMES its saved Claude
+// Code session, which still holds every file it read and every tool result.
+// Replaying the words was the old way and it forgot documents: the story
+// said "I read your worksheet" without the worksheet. The replay is now
+// only the fallback for a session that cannot be found.
+async function canResume(sessionId) {
+  if (!sessionId) return false;
+  try {
+    return !!(await getSessionInfo(sessionId, { dir: process.cwd() }));
+  } catch {
+    return false;
+  }
+}
+
+const starting = new Map(); // chatId -> Promise<ChatSession>, so two quick messages share one start
+
+async function getSession(chatId) {
   let session = sessions.get(chatId);
   if (!session) {
-    // The model picker applies to chats started after it changes.
-    session = new ChatSession((event) => {
-      if (event.type === 'text') session.__turnBuf.push(event.text);
-      if (event.type === 'turn_done') flushTurn(chatId, session);
-      if (uiSend) uiSend({ ...event, chatId });
-    }, currentModel());
-    session.__turnBuf = [];
-    // A transcript on disk means this chat is resuming in a fresh session.
-    const stored = chats.getChat(chatId);
-    session.__needsReplay = !!(stored && stored.messages && stored.messages.length);
-    session.start();
-    sessions.set(chatId, session);
+    if (!starting.has(chatId)) {
+      starting.set(chatId, (async () => {
+        const stored = chats.getChat(chatId);
+        const resume = (await canResume(stored?.sessionId)) ? stored.sessionId : null;
+        // The model picker applies to chats started after it changes.
+        const s = new ChatSession((event) => {
+          if (event.type === 'ready') chats.setSessionId(chatId, event.sessionId);
+          if (event.type === 'text') s.__turnBuf.push(event.text);
+          if (event.type === 'turn_done') flushTurn(chatId, s);
+          if (uiSend) uiSend({ ...event, chatId });
+        }, currentModel(), { resume, chatId });
+        s.__turnBuf = [];
+        // No session to resume but a transcript on disk: hand it the story.
+        s.__needsReplay = !resume && !!(stored && stored.messages && stored.messages.length);
+        s.start();
+        sessions.set(chatId, s);
+        return s;
+      })().finally(() => starting.delete(chatId)));
+    }
+    session = await starting.get(chatId);
   }
   session.lastUsed = Date.now();
   return session;
@@ -259,7 +284,7 @@ wss.on('connection', (ws) => {
       const attachments = (Array.isArray(msg.attachments) ? msg.attachments : [])
         .filter((p) => typeof p === 'string' && p.startsWith(docs.ATTACH_DIR + path.sep) && fs.existsSync(p))
         .slice(0, 8);
-      const session = getSession(chatId);
+      const session = await getSession(chatId);
       let text = msg.text.trim();
       // A resuming session gets the story so far BEFORE this message is
       // added to the transcript, so the current question isn't in it twice.
@@ -273,7 +298,7 @@ wss.on('connection', (ws) => {
             + text;
         }
       }
-      chats.appendMessage(chatId, 'you', msg.text.trim());
+      chats.appendMessage(chatId, 'you', msg.text.trim(), attachments);
       chats.setTabId(chatId, msg.tabId || null);
       session.sendMessage(text, msg.tabId || null, tabLabel, snapshot, attachments);
     } else if (msg.type === 'interrupt') {

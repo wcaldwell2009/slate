@@ -8,7 +8,8 @@
     "start": "node server.js",
     "check:pixel": "node tools/check-pixel-tools.mjs",
     "check:pixel:live": "node tools/check-pixel-live.mjs",
-    "check:docs:live": "node tools/check-docs-live.mjs"
+    "check:docs:live": "node tools/check-docs-live.mjs",
+    "check:memory:live": "node tools/check-memory-live.mjs"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",

@@ -64,15 +64,32 @@ export function saveDoc(name, content) {
   return { ok: true, name: n, bytes: Buffer.byteLength(text) };
 }
 
-export function listDocs() {
-  ensureDirs();
-  return fs.readdirSync(DOCS_DIR, { withFileTypes: true })
+function filesIn(dir) {
+  return fs.readdirSync(dir, { withFileTypes: true })
     .filter((d) => d.isFile() && !d.name.startsWith('.'))
     .map((d) => {
-      const st = fs.statSync(path.join(DOCS_DIR, d.name));
+      const st = fs.statSync(path.join(dir, d.name));
       return { name: d.name, bytes: st.size, modified: st.mtime.toISOString() };
     })
     .sort((a, b) => b.modified.localeCompare(a.modified));
+}
+
+// What the Documents tab shows: the files saved in the folder itself.
+export function listDocs() {
+  ensureDirs();
+  return filesIn(DOCS_DIR);
+}
+
+// What Claude sees: saved documents plus every attachment, with paths, so a
+// file sent days ago in another chat can still be found by name.
+export function listAll() {
+  ensureDirs();
+  return {
+    documents: filesIn(DOCS_DIR).map((f) => ({ ...f, path: path.join(DOCS_DIR, f.name) })),
+    attached: filesIn(ATTACH_DIR).map((f) => ({
+      name: f.name.replace(/^[a-z0-9]+-/, ''), path: path.join(ATTACH_DIR, f.name), bytes: f.bytes, modified: f.modified,
+    })),
+  };
 }
 
 export function readDoc(name) {

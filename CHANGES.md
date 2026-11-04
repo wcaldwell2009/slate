@@ -1,5 +1,27 @@
 # What's been built — plain English
 
+## 2026-11-04 — The copilot stops forgetting
+
+**A chat picks up exactly where it left off.** Before, whenever the copilot
+was restarted or a chat sat quiet for three hours, it started over with only
+the words of the conversation, so it forgot what was inside the documents
+you'd given it and even where they were. Now it reopens the real
+conversation, with everything it had read still in it.
+
+**It has a memory that every chat shares.** Say "remember this" or "keep
+these sheets in mind" and it saves the facts (which files, what the
+assignment needs, due dates) under the project's name. A new chat can see
+them. It can also see your other recent chats and the files in them, and
+search what was said before, so "the packet I sent you the other day" works
+from any chat.
+
+**It was reading Slate's build notes as if they were your project.** The
+copilot's hidden Claude was loading the long developer notes file for Slate,
+which drowned out your actual files. That's switched off.
+
+Your Find the Exploits chat had its three files reconnected and saved to
+memory, so it can find the worksheet again.
+
 ## 2026-10-28 — The copilot makes real documents and edits yours properly
 
 **Editing a Word file you upload keeps it looking the same.** Before, it read

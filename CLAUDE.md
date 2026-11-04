@@ -1,7 +1,7 @@
 # Slate — School Tracker App — Project Handoff
 
 ## Last Updated
-2026-10-28 (round 75 — copilot edits Word files in place, makes PDFs, captures pictures for them)
+2026-11-04 (round 76 — copilot memory: resumes real sessions, shared project memory, no CLAUDE.md leak)
 
 ## What this project is
 Slate is a **local desktop app** that helps Will with school work. **As of
@@ -240,6 +240,54 @@ in the prompt as the student's work to critique, never to improve.
 Node (here, inserting a conversation straight into the shots database) before
 the page is photographed, because that server runs with `SLATE_NO_AI=1` and
 cannot have a conversation of its own.
+
+**Round 76 — the copilot stops forgetting (2026-11-04).** Will: it
+"keeps forgetting previous chats and information I have it save about
+projects… I'll give it a document and later it has no idea." His own chat
+file showed it: *"the path from when you first sent it isn't available to
+me after the restart."* THREE causes, all fixed:
+
+1. **A returning chat got a WORDS-ONLY replay** (round 67). Every server
+restart and every 3-hour idle reap started a fresh session; his Find the
+Exploits chat ran Oct 28-30 and was replayed every day, without the
+documents it had read. **Now the SDK session is RESUMED** (`resume:` in
+`ChatSession.start`): `ready` stores `sessionId` in the chat file
+(`chats.setSessionId`), `getSession` (now async, single-flight via
+`starting`) checks `getSessionInfo(id, {dir: cwd})` and resumes, falling
+back to the replay only when the session file is gone. **Sessions are
+keyed to the cwd** — the copilot must keep running from `browser-copilot/`
+or resume silently falls back. Replay budget 12k→30k and it now lists
+every attached file.
+2. **Attachment paths were never stored** — `appendMessage` now keeps
+`attachments` per message; `attachmentsOf`, the replay and the overview
+use them.
+3. **No memory between chats.** `lib/memory.js`
+(`~/.browser-copilot-memory.json`, `COPILOT_MEMORY`) +
+`remember`/`recall`/`forget` tools; `promptBlock()` and
+`chats.overview(chatId)` (other recent chats + their files) go into every
+session's system prompt; `search_chats` searches all transcripts;
+`list_documents` now returns attachments with paths (`docs.listAll`; the
+Documents tab still uses `listDocs`).
+
+**THE FINDING: the copilot loaded Slate's CLAUDE.md.** The SDK's default
+`settingSources` is ALL, so the copilot's hidden Claude read this file
+(~100KB, found up the tree from `browser-copilot/`) plus Will's personal
+hooks — the round 51 leak again. With it, haiku answered "not mentioned in
+the project documentation" and never called remember even when told to;
+with **`settingSources: []`** it went green. The prompt also says it the
+round-51b way: saying you'll remember saves nothing.
+
+Verified: `npm run check:memory:live` (throwaway server, temp dirs, no
+browser) — code survives a restart without re-reading the file, a new chat
+finds it through memory, and a different chat finds a file it was never
+told to remember. Green on haiku and sonnet (his model). The rig deletes
+its own SDK sessions afterwards (they land beside his real ones in
+`~/.claude/projects/-Users-…-browser-copilot`; 12 earlier rig sessions
+were removed by hand). **His data, touched on purpose:** the Find the
+Exploits chat (`cmvsdxnpycvm9`, backup `~/.browser-copilot-chats-backup-
+2026-11-04-cmvsdxnpycvm9.json`) had its 3 attachment paths backfilled, and
+memory was seeded with them under "SEC 2.3.4 Find the Exploits". Copilot
+on 4321 restarted clean (env -i, round 69 rule).
 
 **Round 75b — one Opera again (2026-10-29).** Will's dropdown showed the
 copilot Opera's stale restored tabs (Common App/Canvas login pages) while he
@@ -2676,6 +2724,11 @@ Open, all offered and none refused — just not answered yet:
 - Will's instruction in a message IS approval.
 
 ## Activity Log
+- **2026-11-04 (round 76)** — Copilot memory: chats resume their real
+  saved session after restarts (documents it read stay remembered),
+  attachment paths are kept, a shared project memory + other-chats overview
+  + chat search work across chats, and its hidden Claude no longer loads
+  Slate's CLAUDE.md. Live check green on haiku and sonnet.
 - **2026-10-28 (round 75)** — Copilot documents: uploaded Word files are now
   edited in place (formatting kept, answers and pictures dropped in by
   paragraph number) instead of rebuilt as plain text; new make_pdf prints

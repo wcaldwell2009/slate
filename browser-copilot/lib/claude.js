@@ -3,6 +3,8 @@ import { query, tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod';
 import * as chrome from './chrome.js';
 import * as docs from './docs.js';
+import * as memory from './memory.js';
+import * as chats from './chats.js';
 
 const SYSTEM_PROMPT = `You are Browser Copilot, a helpful assistant that reads web pages in the user's own Chrome browser and fills in information for them. You are talking to the user in a chat UI where they have selected one of their browser tabs; each of their messages is prefixed with the currently selected tab.
 
@@ -38,7 +40,22 @@ Documents and attached files:
 - EDITING AN UPLOADED WORD FILE ("fill this in", "fix this", "add my screenshot to question 8"): read_file, then ONE edit_docx call with every change. NEVER rebuild it with save_document — that throws away all the formatting. Answers usually go in the empty paragraph under each question (set_text on it); a picture for a question goes inside that empty paragraph (insert_image where 'inside').
 - COPYING A PDF ("make this but with my screenshots in it"): Read the PDF and look carefully at its layout — page size, margins, title style, fonts, numbering, boxes, tables, spacing. Rebuild it as HTML/CSS as faithfully as you can with make_pdf, adding the pictures and any text exactly where the user says. Then Read your PDF and compare it to the original; fix and remake it if anything is off.
 - PICTURES FROM THE BROWSER: capture_image saves a picture of the selected tab (crop with region, using coordinates from a screenshot) and returns an "image" path for make_pdf (<img src="images/…">) or edit_docx (insert_image). If the user wants a picture from another tab, switch_tab first. Capture only what they asked for — crop away browser clutter when they mean one part of the page.
-- The user's original upload is never changed; edited files are saved as new files with a new name unless they ask otherwise.`;
+- The user's original upload is never changed; edited files are saved as new files with a new name unless they ask otherwise.
+- Files from earlier in a chat: if you need what is in a file you were given before and you no longer have it, open it again by its path. list_documents also lists every attached file with its path, newest first — use it to find one by name instead of telling the user you cannot.
+
+Memory across chats:
+- Each chat only remembers itself. Your project memory (below, under "What you have saved") is shared by every chat and survives everything.
+- SAYING you will remember something saves NOTHING. Only the remember tool keeps it — your words in this chat are gone the moment the user opens another chat. So whenever the user says remember / keep in mind / save this / note that / I'll ask about it later, you MUST call remember in that same turn, before you reply. Also call it when they give you lasting facts about a project or assignment (what it is, which files belong to it with their paths, due dates, logins they told you to use, how they want answers written, what is done and what is left), call remember with a short project name and one short note per fact. Do it without being asked when you have just learned something they will clearly want next time — e.g. after reading the sheets for an assignment, save which files they are and what the assignment needs.
+- When the user asks about a project, file, or something they told you before that is not in this chat: look in your saved memory and the list of other chats below, call search_chats with a few key words, and open any file that matches by its path (list_documents lists every file). Never answer "I don't have that" until you have done that.
+- Keep notes short and factual. Use forget when something is finished or no longer true.`;
+
+function systemPrompt(chatId) {
+  const saved = memory.promptBlock();
+  const others = chats.overview(chatId);
+  return SYSTEM_PROMPT
+    + '\n\nWhat you have saved (project memory):' + (saved || '\n(nothing yet)')
+    + (others ? '\n\nThe user\'s other recent chats with you, and the files attached in them (search_chats finds what was said; open a file by its path):\n' + others : '');
+}
 
 const FILE_TOOLS = new Set(['save_document', 'make_pdf', 'edit_docx']);
 
@@ -69,9 +86,13 @@ class MessageQueue {
 }
 
 export class ChatSession {
-  constructor(onEvent, model) {
+  // resume: a saved Claude Code session id. Resuming brings back the whole
+  // session — files read, screenshots, tool results — not just the words.
+  constructor(onEvent, model, { resume, chatId } = {}) {
+    this.chatId = chatId || null;
     this.onEvent = onEvent; // (event) => void — forwarded to the web UI
     this.model = model || process.env.COPILOT_MODEL || 'sonnet';
+    this.resume = resume || null;
     this.currentTabId = null;
     this.queue = new MessageQueue();
     this.q = null;
@@ -355,10 +376,37 @@ export class ChatSession {
           run('make_pdf', async ({ name, html, landscape }) => docs.makePdf(name, html, { landscape: !!landscape }))
         ),
         tool(
+          'remember',
+          'Save a note to your project memory, which every chat (including future ones) can see. One short fact per note, under a short project name, e.g. project "Find the Exploits lab", note "Worksheet: /…/attachments/xyz-Find the Exploits.docx — fill in answers + Wireshark screenshots".',
+          {
+            project: z.string().describe('Short project/assignment name, reused for later notes about the same thing'),
+            note: z.string().describe('The fact to keep, short'),
+          },
+          run('remember', async ({ project, note }) => memory.remember(project, note))
+        ),
+        tool(
+          'recall',
+          'Read your saved project memory — one project, or all of it if no project is given.',
+          { project: z.string().optional() },
+          run('recall', async ({ project }) => memory.recall(project))
+        ),
+        tool(
+          'forget',
+          'Remove saved notes: the notes in a project that contain some text, or the whole project if no text is given. Only when the user asks or a note is no longer true.',
+          { project: z.string(), contains: z.string().optional() },
+          run('forget', async ({ project, contains }) => memory.forget(project, contains))
+        ),
+        tool(
+          'search_chats',
+          "Search the words of ALL the user's chats with you — this one and every other — for something said before (a question, an answer, a file they sent, a name). Returns matching messages with the ones around them, newest first. Use a few key words.",
+          { query: z.string().describe('Key words, e.g. "find the exploits worksheet"') },
+          run('search_chats', async ({ query }) => ({ hits: chats.search(query) }))
+        ),
+        tool(
           'list_documents',
-          'List the documents saved so far (name, size, last modified).',
+          'List the documents you saved AND every file the user has attached in any chat, with full paths, newest first. Use it to find an earlier file by name.',
           {},
-          run('list_documents', async () => docs.listDocs())
+          run('list_documents', async () => docs.listAll())
         ),
         tool(
           'read_document',
@@ -377,7 +425,12 @@ export class ChatSession {
       prompt: this.queue,
       options: {
         model: this.model,
-        systemPrompt: SYSTEM_PROMPT,
+        systemPrompt: systemPrompt(this.chatId),
+        // NO filesystem settings: with them on, this session read Slate's
+        // CLAUDE.md (100KB of build notes) as "project documentation" and
+        // Will's personal hooks — the round 51 leak, here in the copilot.
+        settingSources: [],
+        ...(this.resume ? { resume: this.resume } : {}),
         mcpServers: { browser: this.#buildMcpServer(), docs: this.#buildDocsServer() },
         // Read is allowed so attached files (text, images, PDFs) can be
         // looked at — the same tool Slate's own hidden helpers use. Writing
